@@ -126,6 +126,25 @@ export function createWorld(scene, {compact=false}={}) {
     ochreCloth: new THREE.MeshStandardMaterial({ map: textures.ochre, roughness: 1, side: THREE.DoubleSide }),
     rustCloth: new THREE.MeshStandardMaterial({ map: textures.rust, roughness: 1, side: THREE.DoubleSide }),
   };
+  // Gentle cloth motion, with poles and collision kept fixed.
+  const breeze = { value: 0 };
+  for (const material of [mat.tealCloth, mat.ochreCloth, mat.rustCloth]) {
+    material.onBeforeCompile = shader => {
+      shader.uniforms.courtyardTime = breeze;
+      shader.vertexShader = 'uniform float courtyardTime;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `
+        #include <begin_vertex>
+        vec4 clothWorld = vec4(position,1.0);
+        #ifdef USE_INSTANCING
+          clothWorld = instanceMatrix * clothWorld;
+        #endif
+        float freeEdge = clamp(0.5-position.y,0.0,1.0);
+        transformed.z += sin(courtyardTime*1.7+clothWorld.x*.8+clothWorld.z*.45)
+          * freeEdge * freeEdge * .025;
+      `);
+    };
+    material.customProgramCacheKey = () => 'courtyard-cloth-v1';
+  }
   const textureLoads = [];
   function scannedMaterial(material, asset, repeat = 1, normalStrength = 1) {
     // Keep headless geometry/navigation checks independent of the DOM image API.
@@ -198,7 +217,7 @@ export function createWorld(scene, {compact=false}={}) {
     wornBlock: (() => {
       const shape = new THREE.Shape();
       shape.moveTo(-.44, -.44); shape.lineTo(.44, -.44); shape.lineTo(.44, .44); shape.lineTo(-.44, .44); shape.closePath();
-      const g = new THREE.ExtrudeGeometry(shape, { depth: .88, bevelEnabled: true, bevelThickness: .06, bevelSize: .06, bevelSegments: 1, steps: 1, curveSegments: 1 });
+      const g = new THREE.ExtrudeGeometry(shape, { depth: .88, bevelEnabled: true, bevelThickness: .06, bevelSize: .06, bevelSegments: 3, steps: 1, curveSegments: 1 });
       g.translate(0, 0, -.44); return g;
     })(),
     cylinder: new THREE.CylinderGeometry(1, 1, 1, 10),
@@ -742,5 +761,5 @@ export function createWorld(scene, {compact=false}={}) {
     if (failures.length) console.error('World PBR maps failed to load:', failures.length);
     return { maps: results.length, failures: failures.length };
   });
-  return { colliders, rescueSpawns, spawn: { x: 0, z: compact?20:22 }, compact, bounds, assetsReady, update() {} };
+  return { colliders, rescueSpawns, spawn: { x: 0, z: compact?20:22 }, compact, bounds, assetsReady, update(_dt,time) { breeze.value = time; } };
 }

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-// Staged module only. Main does not import it until derivatives and review exist.
+// Reviewed local scans; placement is checked against the active arena.
 const ROOT = './assets/scanned-props/';
 export const SCANNED_PROP_ASSETS = Object.freeze(['wicker_basket_01', 'namaqualand_boulder_03']);
 export const SCANNED_PROP_PLACEMENTS = Object.freeze([
@@ -10,6 +10,13 @@ export const SCANNED_PROP_PLACEMENTS = Object.freeze([
   { id: 'basket-east-market', asset: 'wicker_basket_01', x: 27, z: -.95, y: .015, width: .66, yaw: .65, containment: 'collider' },
   { id: 'boulder-northwest-edge', asset: 'namaqualand_boulder_03', x: -36.2, z: -29.4, y: -.02, width: 2.6, yaw: .42, containment: 'outside-bounds' },
   { id: 'boulder-northeast-edge', asset: 'namaqualand_boulder_03', x: 36.2, z: -24.4, y: -.02, width: 2.4, yaw: -1.12, containment: 'outside-bounds' },
+].map(Object.freeze));
+
+export const COMPACT_PROP_PLACEMENTS = Object.freeze([
+  { id:'basket-west-counter',asset:'wicker_basket_01',x:-7.50,z:-3.50,y:1.16,width:.66,yaw:.20,containment:'collider' },
+  { id:'basket-east-counter',asset:'wicker_basket_01',x:6.50,z:3.10,y:1.16,width:.66,yaw:-.35,containment:'collider' },
+  { id:'boulder-northwest-edge',asset:'namaqualand_boulder_03',x:-8,z:-18.4,y:-.02,width:3.5,yaw:.42,containment:'outside-bounds' },
+  { id:'boulder-northeast-edge',asset:'namaqualand_boulder_03',x:8,z:-18.4,y:-.02,width:3.2,yaw:-1.12,containment:'outside-bounds' },
 ].map(Object.freeze));
 
 export function scannedPropURL(url, mobile = false) {
@@ -39,6 +46,7 @@ export function assembleScannedProps(templates, { world, mobile = false } = {}) 
   const group = new THREE.Group();
   group.name = 'scanned-market-and-edge-props';
   const placements = [];
+  const layout = world.compact ? COMPACT_PROP_PLACEMENTS : SCANNED_PROP_PLACEMENTS;
   let triangles = 0;
   for (const id of SCANNED_PROP_ASSETS) {
     const scene = templates.get(id);
@@ -58,7 +66,7 @@ export function assembleScannedProps(templates, { world, mobile = false } = {}) 
     const material = source.material.clone();
     // Poly Haven ARM carries AO in red on the same UV set as roughness.
     if (!material.aoMap && material.roughnessMap) { material.aoMap = material.roughnessMap; material.aoMapIntensity = .7; }
-    const items = SCANNED_PROP_PLACEMENTS.filter(p => p.asset === id);
+    const items = layout.filter(p => p.asset === id);
     const mesh = new THREE.InstancedMesh(geometry, material, items.length);
     mesh.name = id;
     mesh.castShadow = !mobile;
@@ -77,7 +85,7 @@ export function assembleScannedProps(templates, { world, mobile = false } = {}) 
     triangles += (geometry.index?.count ?? geometry.attributes.position.count) / 3 * items.length;
     group.add(mesh);
   }
-  group.userData = { staged: true, profile: mobile ? 'mobile-1k' : 'desktop-2k', instances: SCANNED_PROP_PLACEMENTS.length, baseDrawCalls: group.children.length, triangles, placements };
+  group.userData = { staged: true, profile: mobile ? 'mobile-1k' : 'desktop-2k', instances: layout.length, baseDrawCalls: group.children.length, triangles, placements };
   return group;
 }
 

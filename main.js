@@ -5,6 +5,7 @@ import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {GTAOPass} from 'three/addons/postprocessing/GTAOPass.js';
 import {createWorld} from './world.js';
+import {lightCourtyard,createContactShadows} from './courtyard-lighting.js';
 import {loadCitizens} from './crowd-assets.js';
 import {GameSession,RULES,slideMove,CounterFlow} from './game-state.js';
 import {ArcadeAudio,BossConversation} from './audio.js';
@@ -21,7 +22,7 @@ const conversation=new BossConversation(audio,subtitle);
 const boss=new BossEncounter({phaseSeconds:10,counterplay:true}),controller=createControllerInput();let bossView,bossWinDelay=0,contactCooldown=0;
 const phoneProfile=matchMedia('(pointer:coarse)').matches&&Math.min(innerWidth,innerHeight)<800;
 const keys=new Set();let touch={x:0,y:0};let frameTime=0,worldTime=0,savePose=0,toastLife=0,uiTick=0,mapTick=0,gamepadSave=false,gamepadDash=false,gamepadWave=false;
-let renderer,composer,scene,camera,world,teacher,session,citizens,particles,particlePositions,particleColors,particleData=[],particleCursor=0,ao,bloom;
+let contactShadows,renderer,composer,scene,camera,world,teacher,session,citizens,particles,particlePositions,particleColors,particleData=[],particleCursor=0,ao,bloom;
 let cameraMode='chase',cameraYaw=0,cameraPitch=.32,drag=null,lastFrame=performance.now(),quality=true,lastMotion=new THREE.Vector3(0,0,-1),velocity=0;
 const combat=new CounterFlow();let practice=-1,practiceClock=0;
 let fallingStones=[],stoneClock=5;const stoneGeometry=new THREE.IcosahedronGeometry(.85,1),stoneMaterial=new THREE.MeshStandardMaterial({color:'#aa9275',roughness:.92,metalness:0});
@@ -48,24 +49,16 @@ async function init(){
   renderer=new THREE.WebGLRenderer({canvas:$('game'),antialias:!phoneProfile,powerPreference:'high-performance'});
   quality=!phoneProfile;renderer.setPixelRatio(Math.min(devicePixelRatio,phoneProfile?1:1.75));renderer.setSize(innerWidth,innerHeight);$('quality').textContent=quality?'HIGH':'SMOOTH';
   renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.info.autoReset=false;
-  scene=new THREE.Scene();scene.background=new THREE.Color('#b8cbd9');scene.fog=new THREE.FogExp2('#d7c7ad',.006);
-  // Broad sky reflections supply material-aware fill without flattening the sun shadows.
-  const skyCanvas=document.createElement('canvas');skyCanvas.width=256;skyCanvas.height=128;
-  const skyContext=skyCanvas.getContext('2d'),skyGradient=skyContext.createLinearGradient(0,0,0,128);
-  skyGradient.addColorStop(0,'#6f9fce');skyGradient.addColorStop(.48,'#e8ddc2');skyGradient.addColorStop(.52,'#a18b67');skyGradient.addColorStop(1,'#514535');
-  skyContext.fillStyle=skyGradient;skyContext.fillRect(0,0,256,128);
-  const skyTexture=new THREE.CanvasTexture(skyCanvas);skyTexture.colorSpace=THREE.SRGBColorSpace;skyTexture.mapping=THREE.EquirectangularReflectionMapping;
-  const pmrem=new THREE.PMREMGenerator(renderer);scene.environment=pmrem.fromEquirectangular(skyTexture).texture;scene.environmentIntensity=.35;skyTexture.dispose();pmrem.dispose();
-  camera=new THREE.PerspectiveCamera(54,innerWidth/innerHeight,.12,220);
-  const hemi=new THREE.HemisphereLight('#d8e9f4','#7c6146',.85);scene.add(hemi);
-  const sun=new THREE.DirectionalLight('#ffe3a9',3.4);sun.position.set(-30,27,-18);sun.castShadow=true;sun.shadow.mapSize.set(phoneProfile?1024:4096,phoneProfile?1024:4096);Object.assign(sun.shadow.camera,{left:-44,right:44,top:44,bottom:-44,near:1,far:130});sun.shadow.normalBias=.018;sun.shadow.bias=-.00015;sun.shadow.radius=2;scene.add(sun);
-  const fill=new THREE.DirectionalLight('#bfd6ed',.35);fill.position.set(12,15,25);scene.add(fill);
+  scene=new THREE.Scene();
+  lightCourtyard(scene,renderer,{mobile:phoneProfile});
+  camera=new THREE.PerspectiveCamera(49,innerWidth/innerHeight,.12,220);
   world=createWorld(scene,{compact:true});navigation=createNavigation(world.colliders,world.bounds);teacher=await loadMeshyTeacher(phoneProfile?'./assets/muapi-teacher/tripo-detailed-v1/derivatives-v2/teacher-mobile.glb':'./assets/muapi-teacher/tripo-detailed-v1/derivatives-v2/teacher-desktop.glb',{localRig:true,rigProfile:'tripo-arms-down',forwardYaw:-Math.PI/2});scene.add(teacher.group);teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;const maps=await world.assetsReady;if(maps.failures)throw new Error('City material files failed to load.');
   try{const scans=await loadScannedProps({world,mobile:phoneProfile});scans.userData.staged=false;scene.add(scans);world.scannedProps=scans.userData;}catch(error){console.warn('Optional scanned scenery unavailable:',error.message);}
   session=new GameSession(world.rescueSpawns,{finalBoss:true});bossView=await createBossView(scene);$('total').textContent=session.people.length;$('intro-total').textContent=session.people.length;
   const releaseOrder=[...session.spawns].sort((a,b)=>Math.hypot(a.x-world.spawn.x,a.z-world.spawn.z)-Math.hypot(b.x-world.spawn.x,b.z-world.spawn.z));for(let rank=0;rank<releaseOrder.length;rank++)releaseRanks[releaseOrder[rank].id]=rank;
   citizens=await loadCitizens(session.people.length);
   for(let i=0;i<citizens.length;i++){const p=session.people[i],actor=citizens[i];actor.group.position.set(p.x,0,p.z);actor.group.rotation.y=(i*2.399)%6.28;scene.add(actor.group);}
+  contactShadows=createContactShadows(scene,[teacher,...citizens]);
   markers=session.people.map((p,i)=>{
     const mat=new THREE.SpriteMaterial({map:hostileId(i)?hostileTexture:pendingTexture,transparent:true,depthWrite:false});const sprite=new THREE.Sprite(mat);sprite.position.set(p.x,3.1,p.z);sprite.scale.set(.68,.68,1);scene.add(sprite);
     const ring=new THREE.Mesh(new THREE.RingGeometry(.57,.64,40),new THREE.MeshBasicMaterial({color:'#ffe2a0',transparent:true,opacity:.6,side:THREE.DoubleSide,depthWrite:false}));ring.rotation.x=-Math.PI/2;ring.position.set(p.x,.035,p.z);scene.add(ring);
@@ -78,7 +71,7 @@ async function init(){
   scene.traverse(o=>{if(o.material){for(const m of Array.isArray(o.material)?o.material:[o.material])if(m.map)m.map.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());}});
   camera.position.set(9,10,30);camera.lookAt(-2,1,17);renderer.compile(scene,camera);
   ao.enabled=quality;resize();bindInputs();installEducation({isPlaying:()=>session.phase==='playing',togglePause:pause});clearTimeout(window.__gameBootTimer);$('fatal').classList.add('hidden');$('loading').classList.add('hidden');lastFrame=performance.now();requestAnimationFrame(frame);
-  window.__mercy={snapshot:()=>({audio:{enabled:audio.enabled,state:audio.context?.state??'locked',speaking:audio.speaking,error:audio.lastError,played:[...audio.playCounts.keys()]},practice,blocks:combat.blocks,counters:combat.counters,guard:combat.guard,counterWindow:combat.window,phase:session.phase,composure:session.composure,conversation:conversation.active,score:session.score,saved:session.saved,total:session.people.length,timeLeft:session.timeLeft,combo:session.combo,grace:session.grace,position:{x:teacher.group.position.x,z:teacher.group.position.z},nearest:session.nearest(teacher.group.position.x,teacher.group.position.z),cameraMode,fps:Math.round(fps),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,renderSize:{width:renderer.domElement.width,height:renderer.domElement.height},renderProfile:{phone:phoneProfile,quality:quality?'high':'smooth',pixelRatio:renderer.getPixelRatio(),antialias:renderer.getContext().getContextAttributes().antialias,samples:composer.renderTarget1.samples,shadows:renderer.shadowMap.enabled,ambientOcclusion:ao.enabled,bloom:bloom.enabled},scannedProps:world.scannedProps,people:session.people.map(p=>({id:p.id,x:p.x,z:p.z,saved:p.saved})),bolts:bolts.length,colliders:world.colliders.length,worldSeed:260926,stage:session.stage,boss:{active:boss.active,defeated:boss.defeated,influence:boss.influence,ultimate:boss.ultimate,grayCooldown:boss.grayCooldown,attack:boss.attack.name},teacher:teacher.group.userData.asset,voiceClips:audio.clips.size,version:'0.5.1'})};
+  window.__mercy={snapshot:()=>({audio:{enabled:audio.enabled,state:audio.context?.state??'locked',speaking:audio.speaking,error:audio.lastError,played:[...audio.playCounts.keys()]},practice,blocks:combat.blocks,counters:combat.counters,guard:combat.guard,counterWindow:combat.window,phase:session.phase,composure:session.composure,conversation:conversation.active,score:session.score,saved:session.saved,total:session.people.length,timeLeft:session.timeLeft,combo:session.combo,grace:session.grace,position:{x:teacher.group.position.x,z:teacher.group.position.z},nearest:session.nearest(teacher.group.position.x,teacher.group.position.z),cameraMode,fps:Math.round(fps),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,renderSize:{width:renderer.domElement.width,height:renderer.domElement.height},renderProfile:{phone:phoneProfile,quality:quality?'high':'smooth',pixelRatio:renderer.getPixelRatio(),antialias:renderer.getContext().getContextAttributes().antialias,samples:composer.renderTarget1.samples,shadows:renderer.shadowMap.enabled,ambientOcclusion:ao.enabled,bloom:bloom.enabled},scannedProps:world.scannedProps,people:session.people.map(p=>({id:p.id,x:p.x,z:p.z,saved:p.saved})),bolts:bolts.length,colliders:world.colliders.length,worldSeed:260926,stage:session.stage,boss:{active:boss.active,defeated:boss.defeated,influence:boss.influence,ultimate:boss.ultimate,grayCooldown:boss.grayCooldown,attack:boss.attack.name},teacher:teacher.group.userData.asset,voiceClips:audio.clips.size,version:'0.5.2'})};
 }
 function emit(x,y,z,count,color,force=1){for(let j=0;j<count;j++){const i=particleCursor++%particleData.length,p=particleData[i];p.life=.5+Math.random()*.65;p.max=p.life;p.vx=(Math.random()-.5)*force*3;p.vy=(.6+Math.random()*2)*force;p.vz=(Math.random()-.5)*force*3;particlePositions[i*3]=x;particlePositions[i*3+1]=y;particlePositions[i*3+2]=z;particleColors[i*3]=color.r;particleColors[i*3+1]=color.g;particleColors[i*3+2]=color.b;}}
 function pulse(e){const r=new THREE.Mesh(new THREE.RingGeometry(.94,1,80),new THREE.MeshBasicMaterial({color:e.wave?'#b9ffe1':'#ffde8a',transparent:true,opacity:.9,side:THREE.DoubleSide,depthWrite:false}));r.rotation.x=-Math.PI/2;r.position.set(e.x,.06,e.z);scene.add(r);ripples.push({mesh:r,life:0,max:e.wave?.95:.5,radius:e.radius});emit(e.x,.3,e.z,e.wave?65:18,e.wave?colors.mint:colors.gold,e.wave?2.2:1);savePose=.55;if(e.wave)audio.wave();else if(!e.hits)audio.pulse();}
@@ -159,7 +152,7 @@ function bindInputs(){
   $('start').onclick=start;$('again').onclick=()=>start(true);$('restart-pause').onclick=()=>start(true);$('resume').onclick=pause;$('pause').onclick=pause;
   $('audio').onclick=()=>{audio.unlock();if(audio.lastError){audio.enabled=true;const id=audio.lastFailedLine;audio.lastError=null;audio.lastFailedLine=null;if(id)audio.say(id,subtitle);$('audio').textContent='SOUND ON';}else $('audio').textContent=audio.toggle()?'SOUND ON':'SOUND OFF';};
   $('quality').onclick=()=>{quality=!quality;$('quality').textContent=quality?'HIGH':'SMOOTH';renderer.setPixelRatio(Math.min(devicePixelRatio,quality?1.75:1));composer.setPixelRatio(renderer.getPixelRatio());renderer.shadowMap.enabled=quality;ao.enabled=quality;bloom.enabled=quality;resize();};
-  window.addEventListener('resize',resize);window.addEventListener('blur',()=>{keys.clear();if(session.phase==='playing')pause();});document.addEventListener('visibilitychange',()=>{if(document.hidden&&session.phase==='playing')pause();});
+  window.addEventListener('resize',resize);window.addEventListener('blur',()=>{keys.clear();if(session.phase==='playing')pause();});document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();timeSamples=[];if(document.hidden&&session.phase==='playing')pause();});
   document.addEventListener('keydown',e=>{if(!$('education').classList.contains('hidden'))return;if(e.code==='Escape'||e.code==='KeyP'){if(!e.repeat)pause();e.preventDefault();return;}if(session.phase!=='playing')return;if(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyE','ShiftLeft','ShiftRight','KeyQ','KeyR','KeyC'].includes(e.code)){e.preventDefault();keys.add(e.code);if(!e.repeat){if(e.code==='Space'||e.code==='KeyE')rescue();if(e.code.startsWith('Shift'))dash();if(e.code==='KeyQ')rescue(true);if(e.code==='KeyR')noContact();if(e.code==='KeyC')cameraMode=cameraMode==='chase'?'arcade':'chase';}}});
   document.addEventListener('keyup',e=>keys.delete(e.code));
   $('game').addEventListener('pointerdown',e=>{if(session.phase==='playing'){if(e.button===0&&e.pointerType==='mouse'){mouseFire=true;rescue();}else drag={x:e.clientX,y:e.clientY,id:e.pointerId};$('game').setPointerCapture(e.pointerId);}});
@@ -175,7 +168,7 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
   const pad=controller.update(readGamepads(),{phase:session.phase,focused:document.hasFocus()&&!document.hidden&&$('education').classList.contains('hidden')});
   if(pad.actions.start||pad.actions.restart)start();if(pad.actions.pause)pause();
   const playing=session.phase==='playing';document.body.classList.toggle('controller',pad.connected);
-  if(raw>0&&raw<.2){timeSamples.push(raw);if(timeSamples.length>90)timeSamples.shift();fps=1/(timeSamples.reduce((a,b)=>a+b,0)/timeSamples.length);}
+  if(raw>0&&Number.isFinite(raw)&&!document.hidden){timeSamples.push(raw);if(timeSamples.length>90)timeSamples.shift();fps=1/(timeSamples.reduce((a,b)=>a+b,0)/timeSamples.length);}
   if(playing){combat.tick(dt);if(practice>=0){const remaining=session.timeLeft,elapsed=session.elapsed;session.tick(dt);session.timeLeft=remaining;session.elapsed=elapsed;}else session.tick(boss.active&&conversation.active?0:dt);let ix=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)+touch.x;let iz=(keys.has('KeyS')||keys.has('ArrowDown')?1:0)-(keys.has('KeyW')||keys.has('ArrowUp')?1:0)+touch.y;
     if(pad.connected){ix+=pad.move.x;iz+=pad.move.y;cameraYaw-=pad.look.x*dt*2;cameraPitch=THREE.MathUtils.clamp(cameraPitch+pad.look.y*dt,.08,.8);if(pad.held.serve)rescue();if(pad.actions.dash)dash();if(pad.actions.grayRock)rescue(true);if(pad.actions.noContact)noContact();}
     const len=Math.hypot(ix,iz);if(len>1){ix/=len;iz/=len;}tmp.set(ix*Math.cos(cameraYaw)+iz*Math.sin(cameraYaw),0,-ix*Math.sin(cameraYaw)+iz*Math.cos(cameraYaw));if(tmp.lengthSq()>.015)lastMotion.copy(tmp).normalize();if(session.dashLeft>0&&tmp.lengthSq()<.01)tmp.copy(lastMotion);
@@ -196,8 +189,8 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
     if(bossWinDelay>0){bossWinDelay-=dt;if(bossWinDelay<=0){session.finish(true);handleEvents();}}
   }else velocity=0;
   savePose=Math.max(0,savePose-dt);teacher.update(dt,{time:worldTime,speed:velocity,rescuing:savePose>0,saved:false});
-  for(let i=0;i<citizens.length;i++){const p=session.people[i],m=markers[i];const available=practice>=0?i===0:session.available(p);citizens[i].group.visible=available&&(!p.saved||worldTime-m.savedAt<8);m.sprite.visible=available;if(!p.saved)m.ring.visible=available;citizens[i].group.position.set(p.x,0,p.z);citizens[i].update(dt,{time:worldTime,speed:playing?(p.speed||0):0,rescuing:false,saved:p.saved});m.sprite.position.set(p.x,(p.saved?2.9:3.15)+Math.sin(worldTime*2+i)*.10,p.z);m.ring.position.set(p.x,.035,p.z);m.sprite.material.opacity=p.saved?Math.max(.25,1-(worldTime-m.savedAt)*.3):.9;m.sprite.scale.setScalar(p.saved?.49:.64+Math.sin(worldTime*2+i)*.025);m.ring.material.opacity=.4+Math.sin(worldTime*2+i)*.16;}
-  world.update?.(dt,worldTime);
+  for(let i=0;i<citizens.length;i++){const p=session.people[i],m=markers[i];const available=practice>=0?i===0:session.available(p);citizens[i].group.visible=available&&(!p.saved||worldTime-m.savedAt<8);m.sprite.visible=available;if(!p.saved)m.ring.visible=available;citizens[i].group.position.set(p.x,0,p.z);if(citizens[i].group.visible)citizens[i].update(dt,{time:worldTime,speed:playing?(p.speed||0):0,rescuing:false,saved:p.saved});m.sprite.position.set(p.x,(p.saved?2.9:3.15)+Math.sin(worldTime*2+i)*.10,p.z);m.ring.position.set(p.x,.035,p.z);m.sprite.material.opacity=p.saved?Math.max(.25,1-(worldTime-m.savedAt)*.3):.9;m.sprite.scale.setScalar(p.saved?.49:.64+Math.sin(worldTime*2+i)*.025);m.ring.material.opacity=.4+Math.sin(worldTime*2+i)*.16;}
+  world.update?.(dt,worldTime);contactShadows.update();
   for(let i=0;i<particleData.length;i++){const p=particleData[i];if(p.life<=0){particlePositions[i*3+1]=-1000;continue;}p.life-=dt;particlePositions[i*3]+=p.vx*dt;particlePositions[i*3+1]+=p.vy*dt;particlePositions[i*3+2]+=p.vz*dt;p.vy-=dt*1.2;const f=Math.max(0,p.life/p.max);particleColors[i*3]*=1-dt*.55;particleColors[i*3+1]*=1-dt*.55;particleColors[i*3+2]*=1-dt*.55;}
   particles.geometry.attributes.position.needsUpdate=true;particles.geometry.attributes.color.needsUpdate=true;
   for(let i=ripples.length-1;i>=0;i--){const r=ripples[i];r.life+=dt;const t=r.life/r.max;r.mesh.scale.setScalar(.15+r.radius*t);r.mesh.material.opacity=(1-t)*.8;if(t>=1){scene.remove(r.mesh);r.mesh.geometry.dispose();r.mesh.material.dispose();ripples.splice(i,1);}}
@@ -205,7 +198,7 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
     const t=worldTime*.065;camera.position.set(9+Math.sin(t)*2,6.2,world.spawn.z+8.5);camera.lookAt(-1.7,1.7,world.spawn.z-1);teacher.group.rotation.y=Math.PI*.27;
   }else{
     cameraTarget.copy(teacher.group.position);cameraTarget.y=1.45;
-    if(cameraMode==='chase'){cameraTarget.add(new THREE.Vector3(-Math.sin(cameraYaw)*1.5,0,-Math.cos(cameraYaw)*1.5));const distance=7;camDesired.set(Math.sin(cameraYaw)*distance,1.6+cameraPitch*2,Math.cos(cameraYaw)*distance);}
+    if(cameraMode==='chase'){cameraTarget.add(new THREE.Vector3(-Math.sin(cameraYaw)*1.5,0,-Math.cos(cameraYaw)*1.5));const distance=phoneProfile?6.2:5.8;camDesired.set(Math.sin(cameraYaw)*distance,.85+cameraPitch*1.3,Math.cos(cameraYaw)*distance);}
     else camDesired.set(Math.sin(cameraYaw+.55)*21,22,Math.cos(cameraYaw+.55)*21);
     camDesired.add(cameraTarget);
     // Keep the chase camera out of opaque building volumes using segment tests.
