@@ -4,6 +4,8 @@ A satirical, nonviolent rescue arcade prototype from Urantia Book Network. Play 
 
 **GitHub Pages:** [Play You've Been Served](https://ubn606.github.io/youve-been-served/).
 
+Six hits exhaust your composure. Dash through danger, and intercept boss projectiles with Gray Rock. Four successful counters charge No Contact.
+
 Use a recent browser with hardware acceleration. Tap or click Start to begin and unlock sound. No account or paid generation runs during play. Your personal best stays in this browser's local storage.
 
 | Action | Keyboard / mouse | Standard controller |

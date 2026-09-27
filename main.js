@@ -7,7 +7,7 @@ import {GTAOPass} from 'three/addons/postprocessing/GTAOPass.js';
 import {createWorld} from './world.js';
 import {loadCitizens} from './crowd-assets.js';
 import {GameSession,RULES,slideMove} from './game-state.js';
-import {ArcadeAudio} from './audio.js';
+import {ArcadeAudio,BossConversation} from './audio.js';
 import {createNavigation} from './navigation.js';
 import {loadMeshyTeacher} from './meshy-teacher-asset.js';
 import {BossEncounter} from './boss-state.js';
@@ -17,7 +17,8 @@ import {installEducation} from './education-ui.js';
 import {loadScannedProps} from './scanned-props.js';
 
 const $=id=>document.getElementById(id);const audio=new ArcadeAudio();
-const boss=new BossEncounter(),controller=createControllerInput();let bossView,bossWinDelay=0,contactCooldown=0,bossReplyDelay=-1;
+const conversation=new BossConversation(audio,subtitle);
+const boss=new BossEncounter({phaseSeconds:10,counterplay:true}),controller=createControllerInput();let bossView,bossWinDelay=0,contactCooldown=0;
 const phoneProfile=matchMedia('(pointer:coarse)').matches&&Math.min(innerWidth,innerHeight)<800;
 const keys=new Set();let touch={x:0,y:0};let frameTime=0,worldTime=0,savePose=0,toastLife=0,uiTick=0,mapTick=0,gamepadSave=false,gamepadDash=false,gamepadWave=false;
 let renderer,composer,scene,camera,world,teacher,session,citizens,particles,particlePositions,particleColors,particleData=[],particleCursor=0,ao,bloom;
@@ -35,20 +36,28 @@ class GameAO extends GTAOPass{_overrideVisibility(){super._overrideVisibility();
 function fatal(error){console.error(error);$('loading').classList.add('hidden');$('fatal').classList.remove('hidden');$('error-message').textContent='The 3D renderer could not start. Try a current browser with hardware acceleration, then reload. '+(error?.message||'');}
 function texture(draw,size=128){const c=document.createElement('canvas');c.width=c.height=size;draw(c.getContext('2d'),size);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;return t;}
 const glowTexture=texture((c,s)=>{const g=c.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.25,'rgba(255,255,255,.8)');g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fillRect(0,0,s,s);});
-function markerTexture(saved=false){return texture((c,s)=>{c.shadowColor=saved?'#7fffc5':'#ffe6a1';c.shadowBlur=9;c.fillStyle=saved?'#94ffd0':'#ffd272';c.beginPath();c.moveTo(s/2,12);c.lineTo(s-14,s/2);c.lineTo(s/2,s-12);c.lineTo(14,s/2);c.closePath();c.fill();c.shadowBlur=0;c.fillStyle='#204b3b';c.font='bold 67px Arial';c.textAlign='center';c.textBaseline='middle';c.fillText(saved?'✓':'+',s/2,s/2+2);});}
-const pendingTexture=markerTexture(),savedTexture=markerTexture(true);
+function markerTexture(saved=false,hostile=false){return texture((c,s)=>{c.shadowColor=saved?'#7fffc5':'#ffe6a1';c.shadowBlur=9;c.fillStyle=saved?'#94ffd0':hostile?'#dc9cff':'#ffd272';c.beginPath();c.moveTo(s/2,12);c.lineTo(s-14,s/2);c.lineTo(s/2,s-12);c.lineTo(14,s/2);c.closePath();c.fill();c.shadowBlur=0;c.fillStyle='#204b3b';c.font='bold 67px Arial';c.textAlign='center';c.textBaseline='middle';c.fillText(saved?'✓':hostile?'!':'+',s/2,s/2+2);});}
+const pendingTexture=markerTexture(),savedTexture=markerTexture(true),hostileTexture=markerTexture(false,true);
+const hostileId=id=>id%3===2;let foeShots=[];const foeMaterial=new THREE.MeshBasicMaterial({color:'#d89aff'});
 
 async function init(){
   const loadingText=$('loading').querySelector('small');
   THREE.DefaultLoadingManager.onProgress=(_url,loaded)=>{loadingText.textContent=`Preparing characters and scenery: ${loaded} files loaded.`;};
   renderer=new THREE.WebGLRenderer({canvas:$('game'),antialias:!phoneProfile,powerPreference:'high-performance'});
   quality=!phoneProfile;renderer.setPixelRatio(Math.min(devicePixelRatio,phoneProfile?1:1.75));renderer.setSize(innerWidth,innerHeight);$('quality').textContent=quality?'HIGH':'SMOOTH';
-  renderer.shadowMap.enabled=quality;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.info.autoReset=false;
-  scene=new THREE.Scene();scene.background=new THREE.Color('#e4cfac');scene.fog=new THREE.FogExp2('#e4cfac',.0085);
+  renderer.shadowMap.enabled=quality;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.info.autoReset=false;
+  scene=new THREE.Scene();scene.background=new THREE.Color('#e4cfac');scene.fog=new THREE.FogExp2('#e4cfac',.0038);
+  // Broad sky reflections supply material-aware fill without flattening the sun shadows.
+  const skyCanvas=document.createElement('canvas');skyCanvas.width=256;skyCanvas.height=128;
+  const skyContext=skyCanvas.getContext('2d'),skyGradient=skyContext.createLinearGradient(0,0,0,128);
+  skyGradient.addColorStop(0,'#6f9fce');skyGradient.addColorStop(.48,'#e8ddc2');skyGradient.addColorStop(.52,'#a18b67');skyGradient.addColorStop(1,'#514535');
+  skyContext.fillStyle=skyGradient;skyContext.fillRect(0,0,256,128);
+  const skyTexture=new THREE.CanvasTexture(skyCanvas);skyTexture.colorSpace=THREE.SRGBColorSpace;skyTexture.mapping=THREE.EquirectangularReflectionMapping;
+  const pmrem=new THREE.PMREMGenerator(renderer);scene.environment=pmrem.fromEquirectangular(skyTexture).texture;scene.environmentIntensity=.35;skyTexture.dispose();pmrem.dispose();
   camera=new THREE.PerspectiveCamera(54,innerWidth/innerHeight,.12,220);
-  const hemi=new THREE.HemisphereLight('#d8e9f4','#7c6146',1.25);scene.add(hemi);
-  const sun=new THREE.DirectionalLight('#ffe3a9',3.4);sun.position.set(-22,38,-16);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-44,right:44,top:44,bottom:-44,near:1,far:130});sun.shadow.normalBias=.035;sun.shadow.bias=-.00015;sun.shadow.radius=2;scene.add(sun);
-  const fill=new THREE.DirectionalLight('#bfd6d3',.7);fill.position.set(12,15,25);scene.add(fill);
+  const hemi=new THREE.HemisphereLight('#d8e9f4','#7c6146',.85);scene.add(hemi);
+  const sun=new THREE.DirectionalLight('#ffe3a9',3.4);sun.position.set(-30,27,-18);sun.castShadow=true;sun.shadow.mapSize.set(phoneProfile?1024:4096,phoneProfile?1024:4096);Object.assign(sun.shadow.camera,{left:-44,right:44,top:44,bottom:-44,near:1,far:130});sun.shadow.normalBias=.018;sun.shadow.bias=-.00015;sun.shadow.radius=2;scene.add(sun);
+  const fill=new THREE.DirectionalLight('#bfd6ed',.35);fill.position.set(12,15,25);scene.add(fill);
   world=createWorld(scene);navigation=createNavigation(world.colliders,world.bounds);teacher=await loadMeshyTeacher(phoneProfile?'./assets/muapi-teacher/tripo-detailed-v1/derivatives-v2/teacher-mobile.glb':'./assets/muapi-teacher/tripo-detailed-v1/derivatives-v2/teacher-desktop.glb',{localRig:true,rigProfile:'tripo-arms-down',forwardYaw:-Math.PI/2});scene.add(teacher.group);teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;const maps=await world.assetsReady;if(maps.failures)throw new Error('City material files failed to load.');
   try{const scans=await loadScannedProps({world,mobile:phoneProfile});scans.userData.staged=false;scene.add(scans);world.scannedProps=scans.userData;}catch(error){console.warn('Optional scanned scenery unavailable:',error.message);}
   session=new GameSession(world.rescueSpawns,{finalBoss:true});bossView=await createBossView(scene);$('total').textContent=session.people.length;$('intro-total').textContent=session.people.length;
@@ -56,18 +65,18 @@ async function init(){
   citizens=await loadCitizens(session.people.length);
   for(let i=0;i<citizens.length;i++){const p=session.people[i],actor=citizens[i];actor.group.position.set(p.x,0,p.z);actor.group.rotation.y=(i*2.399)%6.28;scene.add(actor.group);}
   markers=session.people.map((p,i)=>{
-    const mat=new THREE.SpriteMaterial({map:pendingTexture,transparent:true,depthWrite:false});const sprite=new THREE.Sprite(mat);sprite.position.set(p.x,3.1,p.z);sprite.scale.set(.68,.68,1);scene.add(sprite);
+    const mat=new THREE.SpriteMaterial({map:hostileId(i)?hostileTexture:pendingTexture,transparent:true,depthWrite:false});const sprite=new THREE.Sprite(mat);sprite.position.set(p.x,3.1,p.z);sprite.scale.set(.68,.68,1);scene.add(sprite);
     const ring=new THREE.Mesh(new THREE.RingGeometry(.57,.64,40),new THREE.MeshBasicMaterial({color:'#ffe2a0',transparent:true,opacity:.6,side:THREE.DoubleSide,depthWrite:false}));ring.rotation.x=-Math.PI/2;ring.position.set(p.x,.035,p.z);scene.add(ring);
     return {sprite,ring,savedAt:-100};
   });
   // Thin player compass keeps the controlled figure legible against stone.
   const playerRing=new THREE.Mesh(new THREE.RingGeometry(.53,.58,48),new THREE.MeshBasicMaterial({color:'#e8f7db',transparent:true,opacity:.6,side:THREE.DoubleSide,depthWrite:false}));playerRing.rotation.x=-Math.PI/2;playerRing.position.y=.027;teacher.group.add(playerRing);
   const n=700;particlePositions=new Float32Array(n*3);particleColors=new Float32Array(n*3);particlePositions.fill(-1000);particleData=Array.from({length:n},()=>({life:0,vx:0,vy:0,vz:0}));const pg=new THREE.BufferGeometry();pg.setAttribute('position',new THREE.BufferAttribute(particlePositions,3));pg.setAttribute('color',new THREE.BufferAttribute(particleColors,3));particles=new THREE.Points(pg,new THREE.PointsMaterial({size:.22,map:glowTexture,vertexColors:true,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));particles.frustumCulled=false;scene.add(particles);
-  const target=new THREE.WebGLRenderTarget(innerWidth,innerHeight,{samples:phoneProfile?0:4});composer=new EffectComposer(renderer,target);composer.addPass(new RenderPass(scene,camera));ao=new GameAO(scene,camera,innerWidth,innerHeight);ao.blendIntensity=.7;ao.updateGtaoMaterial({radius:.65,distanceExponent:1.5,thickness:1,distanceFallOff:1});composer.addPass(ao);bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.16,.45,1.4);bloom.enabled=quality;composer.addPass(bloom);composer.addPass(new OutputPass());
+  const target=new THREE.WebGLRenderTarget(innerWidth,innerHeight,{samples:phoneProfile?0:4});composer=new EffectComposer(renderer,target);composer.addPass(new RenderPass(scene,camera));ao=new GameAO(scene,camera,innerWidth,innerHeight);ao.blendIntensity=.95;ao.updateGtaoMaterial({radius:1.1,distanceExponent:1.5,thickness:1,distanceFallOff:1});composer.addPass(ao);bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.16,.45,1.4);bloom.enabled=quality;composer.addPass(bloom);composer.addPass(new OutputPass());
   scene.traverse(o=>{if(o.material){for(const m of Array.isArray(o.material)?o.material:[o.material])if(m.map)m.map.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());}});
   camera.position.set(9,10,30);camera.lookAt(-2,1,17);renderer.compile(scene,camera);
   ao.enabled=quality;resize();bindInputs();installEducation({isPlaying:()=>session.phase==='playing',togglePause:pause});clearTimeout(window.__gameBootTimer);$('fatal').classList.add('hidden');$('loading').classList.add('hidden');lastFrame=performance.now();requestAnimationFrame(frame);
-  window.__mercy={snapshot:()=>({phase:session.phase,score:session.score,saved:session.saved,total:session.people.length,timeLeft:session.timeLeft,combo:session.combo,grace:session.grace,position:{x:teacher.group.position.x,z:teacher.group.position.z},nearest:session.nearest(teacher.group.position.x,teacher.group.position.z),cameraMode,fps:Math.round(fps),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,renderSize:{width:renderer.domElement.width,height:renderer.domElement.height},renderProfile:{phone:phoneProfile,quality:quality?'high':'smooth',pixelRatio:renderer.getPixelRatio(),antialias:renderer.getContext().getContextAttributes().antialias,samples:composer.renderTarget1.samples,shadows:renderer.shadowMap.enabled,ambientOcclusion:ao.enabled,bloom:bloom.enabled},scannedProps:world.scannedProps,people:session.people.map(p=>({id:p.id,x:p.x,z:p.z,saved:p.saved})),bolts:bolts.length,colliders:world.colliders.length,worldSeed:260926,stage:session.stage,boss:{active:boss.active,defeated:boss.defeated,influence:boss.influence,ultimate:boss.ultimate,grayCooldown:boss.grayCooldown,attack:boss.attack.name},teacher:teacher.group.userData.asset,voiceClips:audio.clips.size,version:'0.3.1'})};
+  window.__mercy={snapshot:()=>({phase:session.phase,composure:session.composure,conversation:conversation.active,score:session.score,saved:session.saved,total:session.people.length,timeLeft:session.timeLeft,combo:session.combo,grace:session.grace,position:{x:teacher.group.position.x,z:teacher.group.position.z},nearest:session.nearest(teacher.group.position.x,teacher.group.position.z),cameraMode,fps:Math.round(fps),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,renderSize:{width:renderer.domElement.width,height:renderer.domElement.height},renderProfile:{phone:phoneProfile,quality:quality?'high':'smooth',pixelRatio:renderer.getPixelRatio(),antialias:renderer.getContext().getContextAttributes().antialias,samples:composer.renderTarget1.samples,shadows:renderer.shadowMap.enabled,ambientOcclusion:ao.enabled,bloom:bloom.enabled},scannedProps:world.scannedProps,people:session.people.map(p=>({id:p.id,x:p.x,z:p.z,saved:p.saved})),bolts:bolts.length,colliders:world.colliders.length,worldSeed:260926,stage:session.stage,boss:{active:boss.active,defeated:boss.defeated,influence:boss.influence,ultimate:boss.ultimate,grayCooldown:boss.grayCooldown,attack:boss.attack.name},teacher:teacher.group.userData.asset,voiceClips:audio.clips.size,version:'0.4.0'})};
 }
 function emit(x,y,z,count,color,force=1){for(let j=0;j<count;j++){const i=particleCursor++%particleData.length,p=particleData[i];p.life=.5+Math.random()*.65;p.max=p.life;p.vx=(Math.random()-.5)*force*3;p.vy=(.6+Math.random()*2)*force;p.vz=(Math.random()-.5)*force*3;particlePositions[i*3]=x;particlePositions[i*3+1]=y;particlePositions[i*3+2]=z;particleColors[i*3]=color.r;particleColors[i*3+1]=color.g;particleColors[i*3+2]=color.b;}}
 function pulse(e){const r=new THREE.Mesh(new THREE.RingGeometry(.94,1,80),new THREE.MeshBasicMaterial({color:e.wave?'#b9ffe1':'#ffde8a',transparent:true,opacity:.9,side:THREE.DoubleSide,depthWrite:false}));r.rotation.x=-Math.PI/2;r.position.set(e.x,.06,e.z);scene.add(r);ripples.push({mesh:r,life:0,max:e.wave?.95:.5,radius:e.radius});emit(e.x,.3,e.z,e.wave?65:18,e.wave?colors.mint:colors.gold,e.wave?2.2:1);savePose=.55;if(e.wave)audio.wave();else if(!e.hits)audio.pulse();}
@@ -83,7 +92,7 @@ function ambientDialogue(){
 }
 function clearSight(a,b){const distance=Math.hypot(b.x-a.x,b.z-a.z),steps=Math.ceil(distance/.35);for(let i=1;i<steps;i++){const f=i/steps,x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f;if(world.colliders.some(o=>x>o.minX&&x<o.maxX&&z>o.minZ&&z<o.maxZ))return false;}return true;}
 function rescue(wave=false){
-  if(session?.phase!=='playing')return;
+  if(session?.phase!=='playing'||boss.active&&conversation.active)return;
   if(wave){
     if(boss.active){if(boss.grayRock()){pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:8.2,wave:true,hits:0});say('hero-grayrock');}return;}
     const charged=session.grace>=100;session.rescue(teacher.group.position.x,teacher.group.position.z,true);if(charged)sayCategory('hero_rescue');return;
@@ -93,15 +102,15 @@ function rescue(wave=false){
   const targets=session.people.filter(p=>!p.saved&&!reserved.has(p.id)&&Math.hypot(p.x-pos.x,p.z-pos.z)<SHOT_RANGE&&clearSight(pos,p));
   targets.sort((a,b)=>Math.hypot(a.x-pos.x,a.z-pos.z)-Math.hypot(b.x-pos.x,b.z-pos.z));
   const target=boss.active&&Math.hypot(bossView.group.position.x-pos.x,bossView.group.position.z-pos.z)<SHOT_RANGE&&clearSight(pos,bossView.group.position)?{id:'boss',...bossView.group.position}:targets[0];const direction=target?new THREE.Vector3(target.x-pos.x,0,target.z-pos.z).normalize():new THREE.Vector3(-Math.sin(cameraYaw),0,-Math.cos(cameraYaw));
-  if(target)teacher.group.rotation.y=Math.atan2(direction.x,direction.z);
+  if(target&&velocity<.1)teacher.group.rotation.y=Math.atan2(direction.x,direction.z);
   const mesh=new THREE.Mesh(boltGeometry,boltMaterial);mesh.position.copy(pos).addScaledVector(direction,.65);mesh.position.y=1.35;
   const aura=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTexture,color:'#ffcc57',transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));aura.scale.set(1.35,1.35,1);mesh.add(aura);scene.add(mesh);bolts.push({mesh,target:target?.id,direction,life:1.45});audio.shot();
 }
 function dash(){if(session?.dash())audio.dash();}
-function noContact(){if(session?.phase!=='playing'||!boss.noContact())return;audio.stopSpeech({resetCooldowns:true});say('hero-nocontact');showToast('NO CONTACT. ALL PEACE.');pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:32,wave:true,hits:1});bossWinDelay=2.4;session.timeLeft=Math.max(5,session.timeLeft);session.score+=1500;}
+function noContact(){if(session?.phase!=='playing'||!boss.noContact())return;conversation.reset();audio.stopSpeech({resetCooldowns:true});say('hero-nocontact');showToast('NO CONTACT. ALL PEACE.');pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:32,wave:true,hits:1});bossWinDelay=2.4;session.timeLeft=Math.max(5,session.timeLeft);session.score+=1500;}
 function showToast(message){$('toast').textContent=message;$('toast').classList.add('show');toastLife=1.35;}
-function start(){audio.unlock();audio.stopSpeech({resetCooldowns:true});bossReplyDelay=-1;session.reset();boss.reset();bossView.clear();bossWinDelay=0;contactCooldown=0;$('boss-hud').classList.add('hidden');$('chapter').innerHTML='<span>01 / MARKET QUARTER</span><small>They rush you. You rescue them.</small>';controller.reset();keys.clear();touch={x:0,y:0};mouseFire=false;shotCooldown=0;voiceClock=0;quipIndex=0;pleaIndex=0;dialogueLife=0;$('dialogue').classList.remove('show');for(const b of bolts){scene.remove(b.mesh);b.mesh.children[0].material.dispose();}bolts=[];teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;cameraYaw=0;lastMotion.set(0,0,-1);velocity=0;savePose=0;toastLife=0;
-  for(const c of citizens)c.setSaved?.(false);for(const m of markers){m.savedAt=-100;m.sprite.material.map=pendingTexture;m.sprite.material.opacity=1;m.ring.visible=true;}
+function start(){audio.unlock();audio.stopSpeech({resetCooldowns:true});conversation.reset();session.reset();boss.reset();bossView.clear();bossWinDelay=0;contactCooldown=0;$('boss-hud').classList.add('hidden');$('chapter').innerHTML='<span>01 / MARKET QUARTER</span><small>They rush you. You rescue them.</small>';controller.reset();keys.clear();touch={x:0,y:0};mouseFire=false;shotCooldown=0;voiceClock=0;quipIndex=0;pleaIndex=0;dialogueLife=0;$('dialogue').classList.remove('show');for(const b of bolts){scene.remove(b.mesh);b.mesh.children[0].material.dispose();}bolts=[];teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;cameraYaw=0;lastMotion.set(0,0,-1);velocity=0;savePose=0;toastLife=0;
+  for(const b of foeShots)scene.remove(b.mesh);foeShots=[];for(const c of citizens)c.setSaved?.(false);for(const [i,m] of markers.entries()){m.savedAt=-100;m.sprite.material.map=hostileId(i)?hostileTexture:pendingTexture;m.sprite.material.opacity=1;m.ring.visible=true;}
   for(const r of ripples){scene.remove(r.mesh);r.mesh.geometry.dispose();r.mesh.material.dispose();}ripples=[];
   for(const f of floaters)f.el.remove();floaters=[];for(const p of particleData)p.life=0;
   for(const id of ['intro','results','pause-screen'])$(id).classList.add('hidden');for(const id of ['hud','bottom','map-wrap','chapter','mobile'])$(id).classList.remove('hidden');$('app').classList.add('playing');$('game').focus();showToast('THE SECOND COMING. FIRST CLASS SERVICE.');say('hero_serve');updateHUD();
@@ -112,6 +121,7 @@ function finish(e){keys.clear();touch={x:0,y:0};audio.finish(e.won);best=Math.ma
 function handleEvents(){for(const e of session.consumeEvents()){
   if(e.type==='pulse')pulse(e);
   if(e.type==='saved'){citizens[e.id].setSaved?.(true);markers[e.id].savedAt=worldTime;markers[e.id].sprite.material.map=savedTexture;markers[e.id].ring.visible=false;emit(e.x,1.5,e.z,35,colors.gold,1.5);audio.save(e.combo);showToast(e.combo>=3?`${e.combo} SERVED IN A ROW!`:'YOU\'VE BEEN SERVED!');if(!audio.speaking){if(++quipIndex%4===0)sayCategory('hero_rescue',{context:citizenVoice(e.id).persona==='self-reflecting'?'obstruction':'general'});else reaction(e.id);}const el=document.createElement('div');el.className='floating';el.textContent=`SERVED! +${e.points}`;$('floaters').appendChild(el);floaters.push({el,x:e.x,z:e.z,y:2.8,life:1.5});}
+  if(e.type==='hurt'){showToast('COMPOSURE HIT · '+e.composure+'/6 · DASH TO EVADE');$('app').animate([{filter:'brightness(1.5) saturate(.4)'},{filter:'none'}],{duration:220});}
   if(e.type==='finish')finish(e);
   if(e.type==='boss-start'){
     boss.start();teacher.group.position.set(0,0,12);teacher.group.rotation.y=Math.PI;cameraYaw=0;session.timeLeft=Math.max(70,session.timeLeft);
@@ -119,13 +129,13 @@ function handleEvents(){for(const e of session.consumeEvents()){
     audio.stopSpeech();voiceClock=0;
   }
 }}
-function updateHUD(){const time=Math.ceil(session.timeLeft);$('score').textContent=String(session.score).padStart(5,'0');$('timer').textContent=`${Math.floor(time/60)}:${String(time%60).padStart(2,'0')}`;$('timer-fill').style.transform=`scaleX(${session.timeLeft/RULES.duration})`;$('saved').textContent=session.saved;$('app').classList.toggle('urgent',session.timeLeft<=15&&session.phase==='playing');$('combo').classList.toggle('hidden',session.combo<2||session.phase!=='playing'||session.stage==='boss');$('combo-count').textContent=session.combo;$('combo-fill').style.transform=`scaleX(${Math.max(0,1-(session.elapsed-session.lastSave)/RULES.comboWindow)})`;$('grace-fill').style.width=session.grace+'%';$('grace-label').textContent=session.grace>=100?'READY! Press Q':'Save people to charge';$('touch-wave').style.opacity=session.grace>=100?'1':'.45';
+function updateHUD(){$('composure').textContent='COMPOSURE '+session.composure+'/6';const time=Math.ceil(session.timeLeft);$('score').textContent=String(session.score).padStart(5,'0');$('timer').textContent=`${Math.floor(time/60)}:${String(time%60).padStart(2,'0')}`;$('timer-fill').style.transform=`scaleX(${session.timeLeft/RULES.duration})`;$('saved').textContent=session.saved;$('app').classList.toggle('urgent',session.timeLeft<=15&&session.phase==='playing');$('combo').classList.toggle('hidden',session.combo<2||session.phase!=='playing'||session.stage==='boss');$('combo-count').textContent=session.combo;$('combo-fill').style.transform=`scaleX(${Math.max(0,1-(session.elapsed-session.lastSave)/RULES.comboWindow)})`;$('grace-fill').style.width=session.grace+'%';$('grace-label').textContent=session.grace>=100?'READY! Press Q':'Save people to charge';$('touch-wave').style.opacity=session.grace>=100?'1':'.45';
   const near=session.nearest(teacher.group.position.x,teacher.group.position.z);const ready=near&&near.distance<=SHOT_RANGE&&clearSight(teacher.group.position,near);$('hint').classList.toggle('ready',Boolean(ready));$('hint').lastElementChild.textContent=near?(ready?'Hold to serve · auto aim':`Find the next crowd · ${Math.ceil(near.distance)}m`):'Everyone has been served';
   if(session.stage==='boss'){
     $('boss-influence').style.width=boss.influence+'%';$('boss-phase').textContent=boss.defeated?'INFLUENCE BROKEN':boss.attack.name.toUpperCase();
-    $('boss-tell').textContent=boss.defeated?'No contact. No audience. No influence.':boss.guardLeft>0?'GRAY ROCK ACTIVE':boss.attack.tell;
+    $('boss-tell').textContent=boss.defeated?'No contact. No audience. No influence.':boss.guardLeft>0?'GRAY ROCK: INTERCEPT A PROJECTILE':boss.attack.tell;
     $('grace-fill').style.width=(1-boss.grayCooldown/8)*100+'%';$('grace-label').textContent=boss.grayCooldown>0?`${boss.grayCooldown.toFixed(1)}s`:'READY · Q / Y';$('touch-wave').style.opacity=boss.grayCooldown>0?'.5':'1';
-    $('hint').lastElementChild.textContent=boss.ultimate>=100?'NO CONTACT READY · R / X':boss.exposedLeft>0?'Influence exposed · hold to serve':'Use Gray Rock · Q / Y';
+    $('hint').lastElementChild.textContent=boss.ultimate>=100?'NO CONTACT READY · R / X':boss.exposedLeft>0?'Influence exposed · hold to serve':'Dodge or intercept bait with Q / Y';
   }
   $('contact-fill').style.width=boss.ultimate+'%';$('contact-label').textContent=boss.ultimate>=100?'READY · R / X':session.stage==='boss'?Math.floor(boss.ultimate)+'%':'Unlock in the final encounter';$('touch-contact').disabled=boss.ultimate<100;
 }
@@ -154,23 +164,23 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
   if(pad.actions.start||pad.actions.restart)start();if(pad.actions.pause)pause();
   const playing=session.phase==='playing';document.body.classList.toggle('controller',pad.connected);
   if(raw>0&&raw<.2){timeSamples.push(raw);if(timeSamples.length>90)timeSamples.shift();fps=1/(timeSamples.reduce((a,b)=>a+b,0)/timeSamples.length);}
-  if(playing){session.tick(dt);let ix=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)+touch.x;let iz=(keys.has('KeyS')||keys.has('ArrowDown')?1:0)-(keys.has('KeyW')||keys.has('ArrowUp')?1:0)+touch.y;
+  if(playing){session.tick(boss.active&&conversation.active?0:dt);let ix=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)+touch.x;let iz=(keys.has('KeyS')||keys.has('ArrowDown')?1:0)-(keys.has('KeyW')||keys.has('ArrowUp')?1:0)+touch.y;
     if(pad.connected){ix+=pad.move.x;iz+=pad.move.y;cameraYaw-=pad.look.x*dt*2;cameraPitch=THREE.MathUtils.clamp(cameraPitch+pad.look.y*dt,.08,.8);if(pad.held.serve)rescue();if(pad.actions.dash)dash();if(pad.actions.grayRock)rescue(true);if(pad.actions.noContact)noContact();}
     const len=Math.hypot(ix,iz);if(len>1){ix/=len;iz/=len;}tmp.set(ix*Math.cos(cameraYaw)+iz*Math.sin(cameraYaw),0,-ix*Math.sin(cameraYaw)+iz*Math.cos(cameraYaw));if(tmp.lengthSq()>.015)lastMotion.copy(tmp).normalize();if(session.dashLeft>0&&tmp.lengthSq()<.01)tmp.copy(lastMotion);
     const desiredSpeed=session.dashLeft>0?RULES.dashSpeed:RULES.walkSpeed;const movement=slideMove(teacher.group.position,tmp.x*desiredSpeed*dt,tmp.z*desiredSpeed*dt,world.colliders,world.bounds);const dx=movement.x-teacher.group.position.x,dz=movement.z-teacher.group.position.z;velocity=Math.hypot(dx,dz)/dt;teacher.group.position.x=movement.x;teacher.group.position.z=movement.z;
     if(velocity>.1){const targetYaw=Math.atan2(dx,dz);teacher.group.rotation.y+=Math.atan2(Math.sin(targetYaw-teacher.group.rotation.y),Math.cos(targetYaw-teacher.group.rotation.y))*Math.min(1,dt*16);if(frameTime>.052){emit(movement.x,.08,movement.z,session.dashLeft>0?5:1,session.dashLeft>0?colors.gold:colors.sand,.35);frameTime=0;}}
     shotCooldown=Math.max(0,shotCooldown-dt);if(keys.has('Space')||keys.has('KeyE')||mouseFire)rescue();
-    updateCrowd(dt);updateBolts(dt);handleEvents();
+    updateCrowd(dt);updateFoes(dt);updateBolts(dt);handleEvents();
     voiceClock+=dt;if(!boss.active&&!boss.defeated&&!audio.speaking&&voiceClock>7){ambientDialogue();voiceClock=0;}
-    contactCooldown=Math.max(0,contactCooldown-dt);boss.update(dt);
+    contactCooldown=Math.max(0,contactCooldown-dt);conversation.update(dt);if(!conversation.active)boss.update(dt);
     for(const e of boss.consumeEvents()){
-      if(e.type==='attackchange'){showToast(e.name.toUpperCase());bossReplyDelay=1.8;if(!audio.speaking){$('dialogue').textContent=`CALIGASTIA: “${e.line}”`;$('dialogue').classList.add('show');dialogueLife=1.8;}}
-      if(e.type==='grayrock')showToast('GRAY ROCK · BAIT DECLINED');
+      if(e.type==='attackchange'){showToast(e.name.toUpperCase());conversation.start(e.attack);}
+      if(e.type==='grayrock')showToast('GRAY ROCK · INTERCEPT THE BAIT');
+      if(e.type==='counter')showToast(e.line);
       if(e.type==='bosshit'){emit(bossView.group.position.x,1.8,bossView.group.position.z,12,colors.gold,1.5);session.score+=30;}
       if(e.type==='blocked'&&e.source==='player')showToast('GRAY ROCK OPENS THE WINDOW · Q / Y');
     }
-    if(boss.active&&bossReplyDelay>=0){bossReplyDelay=Math.max(0,bossReplyDelay-dt);if(bossReplyDelay===0&&!audio.speaking&&boss.phaseElapsed<4){const phaseId=boss.attack.id;bossReplyDelay=.25;sayCategory('boss_'+phaseId).then(started=>{if(started&&boss.attack.id===phaseId)bossReplyDelay=-1;});}}
-    bossView.update(dt,worldTime,boss,teacher.group.position,(blocked,pos)=>{emit(pos.x,pos.y,pos.z,14,blocked?colors.mint:new THREE.Color('#bd86ca'),1);if(!blocked&&contactCooldown===0){session.timeLeft=Math.max(0,session.timeLeft-1);contactCooldown=.6;}else if(blocked){boss.ultimate=Math.min(100,boss.ultimate+4);}});
+    bossView.update(conversation.active?0:dt,worldTime,boss,teacher.group.position,(blocked,pos)=>{emit(pos.x,pos.y,pos.z,14,blocked?colors.mint:new THREE.Color('#bd86ca'),1);if(!blocked&&contactCooldown===0){session.takeHit();contactCooldown=.6;}else if(blocked){boss.counter();}});
     if(bossWinDelay>0){bossWinDelay-=dt;if(bossWinDelay<=0){session.finish(true);handleEvents();}}
   }else velocity=0;
   savePose=Math.max(0,savePose-dt);teacher.update(dt,{time:worldTime,speed:velocity,rescuing:savePose>0,saved:false});
@@ -198,18 +208,36 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
 }
 function updateCrowd(dt){
   const hero=teacher.group.position;navigation.updateTarget(hero.x,hero.z);
-  for(const p of session.people){p.speed=0;if(p.saved||session.elapsed<Math.floor(releaseRanks[p.id]/3)*6)continue;const dist=Math.hypot(p.x-hero.x,p.z-hero.z);if(dist<1.8)continue;
+  for(const p of session.people){p.speed=0;if(p.saved||session.elapsed<8+Math.floor(releaseRanks[p.id]/3)*10)continue;const dist=Math.hypot(p.x-hero.x,p.z-hero.z);if(dist<1.8)continue;
     let dir=dist<6&&clearSight(p,hero)?{x:(hero.x-p.x)/dist,z:(hero.z-p.z)/dist}:navigation.direction(p.x,p.z);
     let sx=0,sz=0;for(const other of session.people){if(other===p||other.saved)continue;const d=Math.hypot(p.x-other.x,p.z-other.z);if(d>.01&&d<1){sx+=(p.x-other.x)/d*(1-d);sz+=(p.z-other.z)/d*(1-d);}}
-    const x=dir.x+sx*.8,z=dir.z+sz*.8,len=Math.hypot(x,z);if(len<.05)continue;const speed=2.7+(p.id%4)*.32;
+    const x=dir.x+sx*.8,z=dir.z+sz*.8,len=Math.hypot(x,z);if(len<.05)continue;const speed=1.9+(p.id%4)*.20;
     const result=slideMove(p,x/len*speed*dt,z/len*speed*dt,world.colliders,world.bounds);const dx=result.x-p.x,dz=result.z-p.z;p.speed=Math.hypot(dx,dz)/dt;p.x=result.x;p.z=result.z;
     if(p.speed>.1)citizens[p.id].group.rotation.y=Math.atan2(dx,dz);
   }
 }
 function updateBolts(dt){for(let i=bolts.length-1;i>=0;i--){const b=bolts[i],target=b.target==='boss'&&boss.active?{...bossView.group.position,id:'boss'}:session.people[b.target];b.life-=dt;
-  if(target&&!target.saved){tmp.set(target.x,1.25,target.z).sub(b.mesh.position);const d=tmp.length();if(d<dt*24+.35){if(clearSight(b.mesh.position,target)){if(target.id==='boss')boss.hit();else session.serve(target.id);emit(target.x,1.2,target.z,20,colors.mint,1.1);}b.life=0;}else b.direction.copy(tmp).normalize();}
+  if(target&&!target.saved){tmp.set(target.x,1.25,target.z).sub(b.mesh.position);const d=tmp.length();if(d<dt*24+.35){if(clearSight(b.mesh.position,target)){if(target.id==='boss')boss.hit();else if(hostileId(target.id)&&!target.influenceBroken){target.influenceBroken=true;markers[target.id].sprite.material.map=pendingTexture;showToast('INFLUENCE BROKEN · SERVE AGAIN');}else session.serve(target.id);emit(target.x,1.2,target.z,20,colors.mint,1.1);}b.life=0;}else b.direction.copy(tmp).normalize();}
   const previous=b.mesh.position.clone();b.mesh.position.addScaledVector(b.direction,24*dt);emit(b.mesh.position.x,b.mesh.position.y,b.mesh.position.z,3,colors.gold,.18);
   if(!clearSight(previous,b.mesh.position))b.life=0;
   if(b.life<=0){scene.remove(b.mesh);b.mesh.children[0].material.dispose();bolts.splice(i,1);}
 }}
 init().catch(fatal);
+
+function updateFoes(dt){
+  const hero=teacher.group.position;
+  if(!boss.active)for(const p of session.people){
+    if(p.saved||p.influenceBroken||!hostileId(p.id)||session.elapsed<8+Math.floor(releaseRanks[p.id]/3)*10)continue;
+    p.attackWait=(p.attackWait??(3+p.id%3))-dt;
+    const distance=Math.hypot(p.x-hero.x,p.z-hero.z);
+    if(p.attackWait<=0&&distance<12&&distance>2&&clearSight(p,hero)){
+      p.attackWait=6;const mesh=new THREE.Mesh(boltGeometry,foeMaterial);mesh.position.set(p.x,1.1,p.z);scene.add(mesh);
+      foeShots.push({mesh,owner:p.id,life:4,dx:(hero.x-p.x)/distance,dz:(hero.z-p.z)/distance});
+    }
+  }
+  for(let i=foeShots.length-1;i>=0;i--){const b=foeShots[i],previous=b.mesh.position.clone();b.life-=dt;b.mesh.position.x+=b.dx*dt*3;b.mesh.position.z+=b.dz*dt*3;
+    if(session.people[b.owner].saved||boss.active||!clearSight(previous,b.mesh.position))b.life=0;
+    if(Math.hypot(b.mesh.position.x-hero.x,b.mesh.position.z-hero.z)<.65){if(contactCooldown<=0){session.takeHit();contactCooldown=1;}b.life=0;}
+    if(b.life<=0){scene.remove(b.mesh);foeShots.splice(i,1);}
+  }
+}

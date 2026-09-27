@@ -26,9 +26,11 @@ const EPSILON = 1e-9;
 const countdown = (value, dt) => value - dt > EPSILON ? value - dt : 0;
 
 export class BossEncounter {
-  constructor({ name = 'Caligastia', influencePerAttack = 6 } = {}) {
+  constructor({ name = 'Caligastia', influencePerAttack = 6, phaseSeconds = BOSS_RULES.phaseSeconds, counterplay = false } = {}) {
     if (typeof name !== 'string' || !name.trim()) throw new TypeError('Boss name must be nonempty.');
     if (!Number.isFinite(influencePerAttack) || influencePerAttack < 0 || influencePerAttack > 100) throw new RangeError('influencePerAttack must be between 0 and 100.');
+    if(!Number.isFinite(phaseSeconds)||phaseSeconds<BOSS_RULES.phaseSeconds)throw new RangeError('Phase duration must be at least five seconds.');
+    this.phaseSeconds=phaseSeconds;this.counterplay=counterplay;
     this.name = name.trim();
     // Set to zero if the caller owns all incoming influence effects.
     this.influencePerAttack = influencePerAttack;
@@ -49,7 +51,7 @@ export class BossEncounter {
     this.grayCooldown = 0;
     this.phaseIndex = 0;
     this.phaseElapsed = 0;
-    this.attackFired = false;
+    this.attackFired = false;this.countered=false;
     this.events = [];
     return this;
   }
@@ -64,7 +66,7 @@ export class BossEncounter {
   _announcePhase() {
     this.events.push({ type: 'attackchange', phaseIndex: this.phaseIndex, attack: this.attack,
       name: this.attack.name, tell: this.attack.tell, line: this.attack.line,
-      duration: BOSS_RULES.phaseSeconds, tellSeconds: BOSS_RULES.tellSeconds });
+      duration: this.phaseSeconds, tellSeconds: BOSS_RULES.tellSeconds });
   }
 
   /** Caller supplies playing time only; no wall clock or independent timer runs. */
@@ -90,22 +92,31 @@ export class BossEncounter {
         }
       }
     }
-    if (this.phaseElapsed + EPSILON >= BOSS_RULES.phaseSeconds) {
-      this.phaseElapsed = Math.max(0, this.phaseElapsed - BOSS_RULES.phaseSeconds);
+    if (this.phaseElapsed + EPSILON >= this.phaseSeconds) {
+      this.phaseElapsed = Math.max(0, this.phaseElapsed - this.phaseSeconds);
       this.phaseIndex = (this.phaseIndex + 1) % BOSS_ATTACKS.length;
       this.attackFired = false;
-      this._announcePhase();
+      this.countered=false;this._announcePhase();
     }
   }
 
   grayRock() {
     if (!this.active || this.grayCooldown > 0) return false;
     this.guardLeft = BOSS_RULES.guardSeconds;
-    this.exposedLeft = BOSS_RULES.exposedSeconds;
+    this.exposedLeft = this.counterplay?0:BOSS_RULES.exposedSeconds;
     this.grayCooldown = BOSS_RULES.grayCooldownSeconds;
-    this.ultimate = Math.min(BOSS_RULES.ultimateRequired, this.ultimate + BOSS_RULES.grayUltimate);
+    this.ultimate = Math.min(BOSS_RULES.ultimateRequired, this.ultimate + (this.counterplay?0:BOSS_RULES.grayUltimate));
     this.events.push({ type: 'grayrock', guardLeft: this.guardLeft, exposedLeft: this.exposedLeft,
       cooldown: this.grayCooldown, ultimate: this.ultimate, line: 'Calm. Clear. Unavailable for drama.' });
+    return true;
+  }
+
+  counter() {
+    if(!this.active||this.guardLeft<=0||this.countered)return false;
+    this.countered=true;this.exposedLeft=BOSS_RULES.exposedSeconds;
+    this.ultimate=Math.min(100,this.ultimate+25);
+    this.influence=Math.max(0,this.influence-10);
+    this.events.push({type:'counter',line:'BAIT DECLINED · INFLUENCE EXPOSED'});
     return true;
   }
 
@@ -117,7 +128,7 @@ export class BossEncounter {
       return false;
     }
     this.influence = Math.max(0, this.influence - BOSS_RULES.hitInfluence);
-    this.ultimate = Math.min(BOSS_RULES.ultimateRequired, this.ultimate + BOSS_RULES.hitUltimate);
+    this.ultimate = Math.min(BOSS_RULES.ultimateRequired, this.ultimate + (this.counterplay?0:BOSS_RULES.hitUltimate));
     this.events.push({ type: 'bosshit', influence: this.influence, ultimate: this.ultimate, attack: this.attack });
     return true;
   }

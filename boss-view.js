@@ -25,6 +25,7 @@ export async function createBossView(scene){
       group.rotation.y=Math.atan2(hero.x-group.position.x,hero.z-group.position.z);
       crown.rotation.y=time*.3;crown.visible=!boss.defeated;shell.visible=boss.active&&boss.exposedLeft<=0;seal.visible=boss.active;
       if(boss.defeated){tether.visible=false;clear();return;}
+      if(dt<=0)return;
       const col=new THREE.Color(boss.attack.color);ringMaterial.color.copy(col);material.color.copy(col);
       if(lastAttack!==boss.phaseIndex){lastAttack=boss.phaseIndex;shotClock=0;}
       const kind=boss.attack.kind;

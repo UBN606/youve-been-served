@@ -109,7 +109,7 @@ export class ArcadeAudio{
       this.speakerHistory.set(this._speakerKey(line,options),now);
       this.playCounts.set(line.id,(this.playCounts.get(line.id)||0)+1);
       if(options.poolKey)this.lastByPool.set(options.poolKey,line.id);
-      const subtitle={speaker:line.role==='hero'?'JESUS':'CITIZEN',text:line.text,duration:line.durationSeconds+.45,
+      const subtitle={speaker:line.role==='hero'?'JESUS':line.role==='boss'?'CALIGASTIA':'CITIZEN',text:line.text,duration:line.durationSeconds+.45,
         id:line.id,category:line.category,gender:line.gender,persona:line.persona,speakerId:options.speakerId||null};
       try{(options.onSubtitle||this.onSubtitle)?.(subtitle);}catch(error){console.warn('Subtitle callback failed:',error.message);}
       return true;
@@ -135,4 +135,23 @@ export class ArcadeAudio{
   wave(){[293.66,369.99,440,587.33,739.99,880].forEach((f,i)=>this.tone(f,1,.12,'triangle',i*.055));}
   finish(won){(won?[293.66,369.99,440,587.33,880]:[293.66,349.23,440,587.33]).forEach((f,i)=>this.tone(f,1,.17,'triangle',i*.14));}
   update(playing){if(!playing||!this.context||!this.enabled)return;const t=this.context.currentTime;if(t<this.nextBeat)return;this.nextBeat=t+.28;const notes=[146.83,0,220,0,174.61,0,261.63,220,146.83,0,293.66,0,196,220,174.61,0];const n=notes[this.beat++%notes.length];if(n)this.tone(n,.26,.035,'triangle');if(this.beat%4===0)this.tone(73.42,.13,.06,'sine');}
+}
+
+// One complete setup and reply per phase; gameplay controls the playing clock.
+export class BossConversation {
+  constructor(audio,onSubtitle){this.audio=audio;this.onSubtitle=onSubtitle;this.reset();}
+  reset(){this.token=(this.token||0)+1;this.queue=[];this.index=0;this.started=false;this.pending=false;this.delay=.8;this.retryTime=0;}
+  get active(){return this.index<this.queue.length;}
+  start(attack){this.reset();const suffix=attack.id.toLowerCase();this.queue=['boss-v4-'+suffix,'hero-v3-boss-'+(suffix==='smearcampaign'?'smear':suffix)];}
+  update(dt){
+    if(!this.active||this.pending||this.audio.speaking)return;
+    if(this.started){this.started=false;this.index++;this.delay=1;this.retryTime=0;return;}
+    this.delay-=dt;if(this.delay>0)return;
+    const id=this.queue[this.index],token=this.token;this.pending=true;
+    this.audio.say(id,this.onSubtitle).then(played=>{
+      if(token!==this.token)return;this.pending=false;
+      if(played)this.started=true;
+      else{this.retryTime+=.25;this.delay=.25;if(this.retryTime>=5){this.index++;this.retryTime=0;}}
+    }).catch(()=>{if(token===this.token){this.pending=false;this.index++;}});
+  }
 }

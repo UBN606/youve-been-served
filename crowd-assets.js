@@ -86,8 +86,8 @@ function actorFromTemplate(template, index) {
       const safeDt = Math.min(.1, Math.max(0, dt));
       const safeSpeed = Number.isFinite(speed) ? Math.max(0, speed) : 0;
       relief = THREE.MathUtils.damp(relief, savedState ? 1 : 0, 5, safeDt);
-      pace = THREE.MathUtils.damp(pace, savedState ? 0 : THREE.MathUtils.clamp(safeSpeed / 4.8, 0, 1.25), 11, safeDt);
-      phase += safeDt * (5.5 + Math.min(safeSpeed, 12) * 1.65);
+      pace = THREE.MathUtils.damp(pace, savedState ? 0 : THREE.MathUtils.clamp(safeSpeed / 2.5, 0, 1.25), 11, safeDt);
+      phase += safeDt * safeSpeed * Math.PI * 2 / 1.5;
       const wave = Math.sin(phase), cheer = Math.sin(time * 5.7 + index);
       model.position.y = floor + Math.abs(Math.cos(phase)) * pace * .046 + Math.max(0, cheer) * relief * .028;
       pose('pelvis', pace * .038, wave * pace * .032);

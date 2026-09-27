@@ -301,7 +301,7 @@ export function createWorld(scene) {
   // Reuse the existing rectangular stone scan, not the round-pebble scan. A
   // 2.81 m repeat gives roughly 0.5-1 m blocks instead of glittering gravel.
   // Source image files and their provenance stay untouched: grading is material-only.
-  scannedMaterial(groundMaterial, 'sandstone_blocks_08', 64, .40);
+  scannedMaterial(groundMaterial, 'sandstone_blocks_08', 64, .72);
   groundMaterial.aoMapIntensity = .20;
   groundMaterial.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
@@ -327,12 +327,12 @@ export function createWorld(scene) {
       // also suppresses the normal map below, rather than merely tinting grooves.
       float drift = groundNoise(vGroundMetres * 0.095 + vec2(17.3, 8.1));
       float brokenEdge = groundNoise(vGroundMetres * 0.31 + vec2(3.7, 27.2));
-      float groundDust = 0.16 + 0.80 * smoothstep(0.27, 0.73, drift * 0.73 + brokenEdge * 0.27);
+      float groundDust = 0.07 + 0.28 * smoothstep(0.27, 0.73, drift * 0.73 + brokenEdge * 0.27);
       float largeWear = groundNoise(vGroundMetres * 0.041 + vec2(41.0, 12.0));
       #ifdef USE_MAP
         float stoneLuma = dot(sampledDiffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-        vec3 mutedStone = mix(vec3(stoneLuma), sampledDiffuseColor.rgb, 0.08);
-        mutedStone = (vec3(0.25) + (mutedStone - vec3(0.25)) * 0.60) * vec3(0.94, 0.995, 1.055);
+        vec3 mutedStone = mix(vec3(stoneLuma), sampledDiffuseColor.rgb, 0.36);
+        mutedStone = (vec3(0.25) + (mutedStone - vec3(0.25)) * 1.10) * vec3(0.94, 0.995, 1.055);
         vec3 dryDust = vec3(0.315, 0.310, 0.295) * (0.94 + largeWear * 0.12);
         diffuseColor.rgb = diffuse * mix(mutedStone, dryDust, groundDust);
       #endif
@@ -342,18 +342,20 @@ export function createWorld(scene) {
       roughnessFactor = mix(roughnessFactor, 0.98, groundDust);
     `);
   };
-  groundMaterial.customProgramCacheKey = () => 'quiet-dusty-stone-paving-v1';
+  groundMaterial.customProgramCacheKey = () => 'market-paving-v4';
   // Variation lives in the material, so the walking surface needs only two triangles.
   const groundGeometry = new THREE.PlaneGeometry(180, 180);
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
   ground.rotation.x = -Math.PI / 2; ground.position.y = -.035; ground.receiveShadow = true; world.add(ground);
 
   function pot(x, z, scale = 1, material = 'terracotta', y = 0) {
+    if(y<.3)collision(x,z,.76*scale,.76*scale);
     add('pot', material, x, y, z, scale, scale, scale, 0, rng() * 6, 0, rng() * .13);
     for (const side of [-1, 1]) add('rim', material, x + side * .31 * scale, y + .75 * scale, z,
       .18 * scale, .24 * scale, .16 * scale, 0, 0, side * -.22);
   }
   function crate(x, z, w = 1, y = .45) {
+    if(y<1)collision(x,z,w,.82);
     // Open gaps and an actual bottom replace the previous solid cube.
     for (let plank = 0; plank < 4; plank++) box('woodLight', x - w * .37 + plank * w * .247, y - .40, z, w * .22, .07, .78);
     for (const side of [-1, 1]) {
@@ -548,9 +550,33 @@ export function createWorld(scene) {
       add('sack', 'sack', x + (p - 1) * .40, .83, z - .50 + p * .45, .80, .88, 1.12, 0, p * .43, (p - 1) * .11);
       add('rim', 'woodLight', x + (p - 1) * .40, 1.65, z - .50 + p * .45, .075, .075, .10, Math.PI / 2);
     }
-    collision(x, z + .35, 2.3, 3.8);
+    collision(x, z + .95, 2.3, 4.65);
   }
   cart(-21.3, -9.0); cart(21.1, 10.5);
+  // Street rooms: layered shop fronts and overhead shade break the open plaza.
+  for(const [x,z,color] of [[-6.7,17,'rustCloth'],[6.7,24,'tealCloth'],[-6.7,-16,'ochreCloth'],[6.7,-26,'rustCloth']]){
+    stall(x,z,3.0,1.7,color,Math.PI/2);
+  }
+  for(const z of [27,12,-5,-23]){
+    const shade=z===12?'tealCloth':'ochreCloth';
+    add('awning',shade,0,6.5,z,16.8,3.1,1,-Math.PI/2,0,.015);
+    for(const x of [-8.65,8.65]){
+      box('pale',x,.16,z,1.04,.32,1.04);
+      add('cylinder','stone',x,2.9,z,.36,5.6,.36);
+      box('pale',x,5.75,z,.98,.28,.98);
+      box('wood',x,6.15,z,.15,.8,.15);
+      collision(x,z,1.05,1.05);
+      // Brass-colored lamps and planted urns provide small readable landmarks.
+      add('pot','terracotta',x*.89,0,z+.8,.55,.65,.55);collision(x*.89,z+.8,.55,.55);
+      add('ball','yellow',x*.97,4.7,z,.11,.18,.11);
+    }
+    branch(new THREE.Vector3(-8.65,6.25,z),new THREE.Vector3(8.65,6.25,z),.025,'wood');
+    for(let flag=0;flag<9;flag++){
+      const x=-7+flag*1.75;
+      add('awning',flag%2?'rustCloth':'tealCloth',x,5.85,z+.12,.60,.85,1,0,0,(flag%2?.10:-.10));
+    }
+  }
+
 
   function olive(x, z, scale = 1) {
     const leafRandom = randomSource(SEED + Math.round(x * 317 + z * 997));
@@ -586,7 +612,7 @@ export function createWorld(scene) {
         }
       }
     }
-    collision(x, z, .65 * scale, .65 * scale);
+    collision(x, z, 1.25 * scale, 1.25 * scale);
     box('pale', x, .16, z, 1.25 * scale, .32, 1.25 * scale);
   }
   function palm(x, z, scale = 1) {
