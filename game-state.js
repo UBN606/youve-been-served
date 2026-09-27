@@ -1,4 +1,4 @@
-export const RULES=Object.freeze({duration:90,rescueRadius:3.6,waveRadius:8.2,rescueCooldown:.48,comboWindow:7,dashDuration:.24,dashCooldown:1.05,walkSpeed:4.2,dashSpeed:12,radius:.43});
+export const RULES=Object.freeze({duration:90,waveSize:6,rescueRadius:3.6,waveRadius:8.2,rescueCooldown:.48,comboWindow:7,dashDuration:.24,dashCooldown:1.05,walkSpeed:4.2,dashSpeed:12,radius:.43});
 export function canStand(x,z,colliders,radius=RULES.radius){
   return !colliders.some(b=>{const qx=Math.max(b.minX,Math.min(x,b.maxX)),qz=Math.max(b.minZ,Math.min(z,b.maxZ));return (x-qx)**2+(z-qz)**2<radius**2;});
 }
@@ -13,6 +13,15 @@ export function slideMove(pos,dx,dz,colliders,bounds,radius=RULES.radius){
     if(canStand(x,nz,colliders,radius))z=nz;
   }
   return {x,z};
+}
+// A block opens a short, single-use counter opportunity against its sender.
+export class CounterFlow{
+  constructor(){this.reset();}
+  reset(){this.guard=0;this.cooldown=0;this.window=0;this.owner=null;this.blocks=0;this.counters=0;}
+  tick(dt){for(const key of ['guard','cooldown','window'])this[key]=Math.max(0,this[key]-Math.max(0,dt));}
+  defend(){if(this.cooldown>0)return false;this.guard=.9;this.cooldown=2.4;return true;}
+  block(owner){if(this.guard<=0)return false;this.blocks++;this.owner=owner;this.window=3;return true;}
+  counter(owner){if(this.window<=0||owner!==this.owner)return false;this.window=0;this.counters++;return true;}
 }
 export class GameSession{
   constructor(spawns,{finalBoss=false}={}){this.finalBoss=finalBoss;this.spawns=spawns.map((s,i)=>({...s,id:i}));this.phase='ready';this.reset();this.phase='ready';}
@@ -32,11 +41,12 @@ export class GameSession{
     if(wave)this.grace=0;
     this.cooldown=wave?.9:RULES.rescueCooldown;
     const radius=wave?RULES.waveRadius:RULES.rescueRadius;
-    const hits=this.people.filter(p=>!p.saved&&Math.hypot(p.x-x,p.z-z)<=radius);
+    const hits=this.people.filter(p=>!p.saved&&this.available(p)&&Math.hypot(p.x-x,p.z-z)<=radius);
     this.events.push({type:'pulse',x,z,radius,wave,hits:hits.length});
     return this._save(hits);
   }
-  serve(id){if(this.phase!=='playing')return [];const person=this.people.find(p=>p.id===id&&!p.saved);return this._save(person?[person]:[]);}
+  available(person){return person.wave===undefined||person.wave<=Math.floor(this.saved/RULES.waveSize);}
+  serve(id){if(this.phase!=='playing')return [];const person=this.people.find(p=>p.id===id&&!p.saved&&this.available(p));return this._save(person?[person]:[]);}
   _save(hits){
     for(const p of hits){
       this.combo=this.elapsed-this.lastSave<=RULES.comboWindow?this.combo+1:1;this.lastSave=this.elapsed;
@@ -52,6 +62,6 @@ export class GameSession{
     return hits;
   }
   finish(won){if(this.phase!=='playing')return;this.phase='finished';this.won=won;const bonus=won?Math.floor(this.timeLeft)*20:0;this.score+=bonus;this.events.push({type:'finish',won,bonus});}
-  nearest(x,z){let nearest=null,distance=Infinity;for(const p of this.people){if(p.saved)continue;const d=Math.hypot(p.x-x,p.z-z);if(d<distance){nearest=p;distance=d;}}return nearest?{...nearest,distance}:null;}
+  nearest(x,z){let nearest=null,distance=Infinity;for(const p of this.people){if(p.saved||!this.available(p))continue;const d=Math.hypot(p.x-x,p.z-z);if(d<distance){nearest=p;distance=d;}}return nearest?{...nearest,distance}:null;}
   consumeEvents(){const events=this.events;this.events=[];return events;}
 }

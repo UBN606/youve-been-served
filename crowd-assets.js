@@ -4,6 +4,7 @@ import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
 const robeColors = ['#9d6750','#647989','#a38f64','#787253','#8b6c79','#a28162','#587772','#a05f49'];
 const scarfColors = ['#b2a184','#9c896b','#c1b193','#7f8076','#a8977c'];
+const CROWD_ASSET_DIRECTORY='./assets/crowd/rigged-v3';
 let templatesPromise;
 
 function actorFromTemplate(template, index) {
@@ -78,6 +79,12 @@ function actorFromTemplate(template, index) {
   }
   let savedState = false, relief = 0, pace = 0, phase = index * 1.173;
   group.userData.asset = { source: `citizen-${index % 2 ? 'female' : 'male'}.glb`, bones: bones.size, anatomical: true };
+  const authoredClips=template.animations||[];
+  const mixer=authoredClips.length?new THREE.AnimationMixer(model):null;
+  const runAction=mixer?.clipAction(authoredClips.find(c=>c.name==='Run')).play();
+  const idleAction=mixer?.clipAction(authoredClips.find(c=>c.name==='Idle')).play();
+  let locomotionWeight=0;
+  group.userData.asset.clips=authoredClips.map(c=>c.name);
   const actor = {
     group,
     setSaved(value = true) { savedState = Boolean(value); },
@@ -85,6 +92,11 @@ function actorFromTemplate(template, index) {
       if (saved !== undefined) savedState = Boolean(saved);
       const safeDt = Math.min(.1, Math.max(0, dt));
       const safeSpeed = Number.isFinite(speed) ? Math.max(0, speed) : 0;
+      if(mixer){
+        locomotionWeight=THREE.MathUtils.damp(locomotionWeight,!savedState&&safeSpeed>.1?1:0,12,safeDt);
+        runAction.setEffectiveWeight(locomotionWeight);runAction.setEffectiveTimeScale(THREE.MathUtils.clamp(safeSpeed/1.37,.1,3.5));
+        idleAction.setEffectiveWeight(1-locomotionWeight);mixer.update(safeDt);return;
+      }
       relief = THREE.MathUtils.damp(relief, savedState ? 1 : 0, 5, safeDt);
       pace = THREE.MathUtils.damp(pace, savedState ? 0 : THREE.MathUtils.clamp(safeSpeed / 2.5, 0, 1.25), 11, safeDt);
       phase += safeDt * safeSpeed * Math.PI * 2 / 1.5;
@@ -114,7 +126,7 @@ export async function loadCitizens(count = 18) {
   if (count === 0) return [];
   if (!templatesPromise) {
     const loader = new GLTFLoader();
-    templatesPromise = Promise.all(['male','female'].map(type => loader.loadAsync(`./assets/crowd/citizen-${type}.glb`).then(result => result.scene))).then(templates => {
+    templatesPromise = Promise.all(['male','female'].map(type => loader.loadAsync(`${CROWD_ASSET_DIRECTORY}/citizen-${type}.glb`).then(result => {result.scene.animations=result.animations;return result.scene;}))).then(templates => {
       // The two self-contained GLBs embed the same eye map; share it at runtime.
       let eyeMap;
       for (const template of templates) template.traverse(object => {

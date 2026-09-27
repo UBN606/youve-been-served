@@ -9,6 +9,7 @@ const DEFAULTS = {
   fadeSeconds: .22,
   movingThreshold: .12,
   runSpeed: 6,
+  maxRunScale: 1.8,
   idleFallback: 'hold-run-frame',
   idleFrameTime: 0,
   centerHorizontal: true,
@@ -75,7 +76,7 @@ function rootTranslationEvidence(clips, model, scale) {
 export function createMeshyTeacherActor(gltf, options = {}) {
   if (!gltf?.scene?.isObject3D) throw new TypeError('A parsed GLTF scene is required.');
   const settings = { ...DEFAULTS, ...options };
-  for (const key of ['height', 'fadeSeconds', 'runSpeed']) {
+  for (const key of ['height', 'fadeSeconds', 'runSpeed', 'maxRunScale']) {
     if (!Number.isFinite(settings[key]) || settings[key] <= 0) throw new RangeError(`${key} must be positive and finite.`);
   }
   for (const key of ['forwardYaw', 'movingThreshold', 'idleFrameTime']) {
@@ -180,7 +181,7 @@ export function createMeshyTeacherActor(gltf, options = {}) {
       runWeight = THREE.MathUtils.damp(runWeight, moving && runAction ? 1 : 0, 4 / settings.fadeSeconds, safeDt);
       if (runAction) {
         runAction.setEffectiveWeight(runWeight);
-        runAction.setEffectiveTimeScale(moving ? THREE.MathUtils.clamp(metresPerSecond / settings.runSpeed, .45, 1.8) : 1);
+        runAction.setEffectiveTimeScale(moving ? THREE.MathUtils.clamp(metresPerSecond / settings.runSpeed, .45, settings.maxRunScale) : 1);
       }
       if (idleAction) idleAction.setEffectiveWeight(1 - runWeight);
       mixer.update(safeDt);

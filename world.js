@@ -97,7 +97,7 @@ function makeTextures() {
   return { stone, cobble, barkColor, barkHeight, barkRough, woodColor, woodHeight, teal: cloth('#286b6c'), ochre: cloth('#ae7035'), rust: cloth('#94563c') };
 }
 
-export function createWorld(scene) {
+export function createWorld(scene, {compact=false}={}) {
   const world = new THREE.Group(); world.name = 'Jerusalem • market quarter'; scene.add(world);
   const rng = randomSource(SEED);
   // Decoration has its own stream so added details cannot move existing art.
@@ -693,7 +693,13 @@ export function createWorld(scene) {
   // Distant terraced hills use the same warm limestone palette.
   for (let i = 0; i < 12; i++) add('leafBall', 'roof', (i - 5.5) * 16, -1.3, -80 - rng() * 10, 17 + rng() * 7, 6 + rng() * 8, 17, 0, rng(), 0, .08);
 
-  for (const [key, items] of batches) {
+  if(compact){
+    for(const x of [-10.65,10.65]){box('stone',x,.85,5,1.0,1.7,40.7);box('pale',x,1.75,5,1.12,.18,40.7);collision(x,5,1,40.7);}
+    for(const z of [-15.65,25.65]){box('stone',0,.85,z,22.3,1.7,1);box('pale',0,1.75,z,22.4,.18,1.12);collision(0,z,22.3,1);}
+  }
+  for (const [key, originalItems] of batches) {
+    const items=compact?originalItems.filter(item=>Math.abs(item.matrix.elements[12])<25&&Math.abs(item.matrix.elements[14]-5)<43):originalItems;
+    if(!items.length)continue;
     const [geometry, material] = key.split('/');
     const mesh = new THREE.InstancedMesh(geo[geometry], mat[material], items.length);
     mesh.name = `District ${geometry} • ${material}`;
@@ -726,11 +732,15 @@ export function createWorld(scene) {
     { x: -21.0, z: -19.9, kind: 'fallen', label: 'Help the traveler' },
     { x: -12.9, z: -33.5, kind: 'weary', label: 'Lift their spirits' },
   ];
-  const bounds = { minX: -34, maxX: 34, minZ: -34, maxZ: 34 };
+  const bounds = compact?{minX:-10.1,maxX:10.1,minZ:-15.1,maxZ:25.1}:{ minX: -34, maxX: 34, minZ: -34, maxZ: 34 };
+  if(compact){
+    const positions=[[-3,12],[3,9],[-3,3],[3,0],[-3,-6],[3,-10]];
+    rescueSpawns.splice(0,rescueSpawns.length,...Array.from({length:18},(_,id)=>({x:positions[id%6][0],z:positions[id%6][1],wave:Math.floor(id/6),label:['Love Bomb','Mirror','Smear Campaign'][Math.floor(id/6)]+': serve the crowd'})));
+  }
   const assetsReady = Promise.allSettled(textureLoads).then((results) => {
     const failures = results.filter(result => result.status === 'rejected');
     if (failures.length) console.error('World PBR maps failed to load:', failures.length);
     return { maps: results.length, failures: failures.length };
   });
-  return { colliders, rescueSpawns, spawn: { x: 0, z: 22 }, bounds, assetsReady, update() {} };
+  return { colliders, rescueSpawns, spawn: { x: 0, z: compact?20:22 }, compact, bounds, assetsReady, update() {} };
 }

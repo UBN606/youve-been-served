@@ -1,10 +1,10 @@
 # You've Been Served / Mercy Run
 
-A satirical, nonviolent rescue arcade prototype from Urantia Book Network. Play as Jesus, dash through a Jerusalem-inspired market, save 18 neighbors and break Caligastia's influence with Gray Rock and No Contact. The boss mechanics and comic dialogue are fictional.
+A satirical, nonviolent rescue arcade prototype from Urantia Book Network. Play as Jesus, dash through three waves in a Jerusalem-inspired courtyard, save all 18 neighbors and break Caligastia's influence with Gray Rock and No Contact. The boss mechanics and comic dialogue are fictional.
 
 **GitHub Pages:** [Play You've Been Served](https://ubn606.github.io/youve-been-served/).
 
-Six hits exhaust your composure. Dash through danger, and intercept boss projectiles with Gray Rock. Four successful counters charge No Contact.
+Start with untimed hit, block and counter practice. Dodge marked stonefalls; block bait with Gray Rock, then serve its sender within three seconds for triple points. Six hits exhaust your patience. Four boss counters charge No Contact. Save a score card and share the game link after a round.
 
 Use a recent browser with hardware acceleration. Tap or click Start to begin and unlock sound. No account or paid generation runs during play. Your personal best stays in this browser's local storage.
 
@@ -14,7 +14,7 @@ Use a recent browser with hardware acceleration. Tap or click Start to begin and
 | Look | Right-mouse drag | Right stick |
 | Serve | Hold Space / E / left click | Hold A / RT |
 | Dash | Shift | B |
-| Gray Rock / charged city rescue | Q | Y |
+| Gray Rock / timed block | Q | Y |
 | No Contact when charged | R | X |
 | Pause / resume | P / Escape | Start |
 | Begin / restart | On-screen button | A / Start |

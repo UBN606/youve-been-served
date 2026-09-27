@@ -23,7 +23,7 @@ export async function createBossView(scene){
       if(!group.visible){clear();return;}
       actor.update(dt,{time,speed:0,rescuing:boss.active&&boss.tellLeft>0,saved:boss.defeated});
       group.rotation.y=Math.atan2(hero.x-group.position.x,hero.z-group.position.z);
-      crown.rotation.y=time*.3;crown.visible=!boss.defeated;shell.visible=boss.active&&boss.exposedLeft<=0;seal.visible=boss.active;
+      crown.rotation.y=time*.3;crown.visible=!boss.defeated;shell.visible=boss.defeated||boss.active&&boss.exposedLeft<=0;seal.visible=boss.active||boss.defeated;shell.material.color.set(boss.defeated?'#8eeac1':'#67458e');shell.material.opacity=boss.defeated?.35:.13;if(boss.defeated)ringMaterial.color.set('#8eeac1');
       if(boss.defeated){tether.visible=false;clear();return;}
       if(dt<=0)return;
       const col=new THREE.Color(boss.attack.color);ringMaterial.color.copy(col);material.color.copy(col);

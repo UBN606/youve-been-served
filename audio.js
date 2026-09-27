@@ -26,7 +26,7 @@ export function dialogueContextForClip(clip) {
 
 export class ArcadeAudio{
   constructor(options={}){
-    this.enabled=true;this.context=null;this.nextBeat=0;this.beat=0;
+    this.completedLines=new Map();this.enabled=true;this.context=null;this.nextBeat=0;this.beat=0;
     this.clips=new Map();this.speaking=false;this.voice=null;this.paused=false;
     this.onSubtitle=options.onSubtitle||null;
     this.now=options.now||(()=>performance.now()/1000);
@@ -49,6 +49,7 @@ export class ArcadeAudio{
   toggle(){this.enabled=!this.enabled;if(this.master)this.master.gain.setTargetAtTime(this.enabled?.35:0,this.context.currentTime,.05);if(this.voice)this.voice.muted=!this.enabled;return this.enabled;}
   _speakerKey(line,options){return options.speakerId?String(options.speakerId):`${line.role}:${line.gender||'any'}:${line.persona}`;}
   _eligible(line,options,now){
+    if(line.id==='citizen-v3-return-donkey'&&now-(this.completedLines.get('citizen-v3-donkey')??-Infinity)>60)return false;
     const categoryWait=line.category==='hero_reflection'?Math.max(18,this.cooldowns.category):this.cooldowns.category;
     return now>=(this.lineHistory.get(line.id)??-Infinity)+this.cooldowns.line
       &&now>=(this.categoryHistory.get(line.category)??-Infinity)+categoryWait
@@ -100,7 +101,7 @@ export class ArcadeAudio{
     try{
       voice=this.audioFactory(new URL(line.file, document.baseURI).href);this.voice=voice;
       voice.volume=.8;voice.muted=!this.enabled;
-      voice.onended=()=>finish();voice.onerror=()=>finish(false);
+      voice.onended=()=>{if(token===this.token&&this.enabled){this.completedLines.set(line.id,this.now());if(line.id==='citizen-v3-return-donkey')this.completedLines.delete('citizen-v3-donkey');}finish();};voice.onerror=()=>finish(false);
       await voice.play();
       if(token!==this.token||this.voice!==voice)return false;
       if(this.paused)voice.pause();
@@ -119,7 +120,7 @@ export class ArcadeAudio{
     this.token++;
     if(this.voice){this.voice.onended=null;this.voice.onerror=null;this.voice.pause();this.voice.currentTime=0;}
     this.voice=null;this.speaking=false;this.paused=false;this.nextSpeechAt=this.now();
-    if(resetCooldowns){this.lineHistory.clear();this.categoryHistory.clear();this.speakerHistory.clear();this.lastByPool.clear();this.playCounts.clear();}
+    if(resetCooldowns){this.completedLines.clear();this.lineHistory.clear();this.categoryHistory.clear();this.speakerHistory.clear();this.lastByPool.clear();this.playCounts.clear();}
   }
   pauseSpeech(paused){
     this.paused=Boolean(paused);
