@@ -1,4 +1,4 @@
-const ALIASES = Object.freeze({hero_served:'hero-served',hero_serve:'hero-serve',hero_worry:'hero-help',hero_selfish:'hero-selfish',citizen_saved:'citizen-saved',citizen_thanks:'citizen-thanks',citizen_else:'citizen-somebody',citizen_me:'citizen-aboutme',plea_boyfriend:'citizen-boyfriend',plea_girlfriend:'citizen-girlfriend','hero-grayrock':'hero-v3-grayrock','hero-nocontact':'hero-v3-nocontact'});
+const ALIASES = Object.freeze({hero_served:'hero-served',hero_serve:'hero-serve',hero_worry:'hero-help',hero_selfish:'hero-selfish',citizen_saved:'citizen-saved',citizen_thanks:'citizen-thanks',citizen_else:'citizen-somebody',citizen_me:'citizen-aboutme',plea_boyfriend:'citizen-boyfriend',plea_girlfriend:'citizen-girlfriend','hero-grayrock':'hero-v3-grayrock','hero-nocontact':'hero-v5-quarantine'});
 const LEGACY = Object.freeze({
   'hero-served':{category:'hero_rescue'},'hero-serve':{category:'hero_reflection'},
   'hero-selfish':{category:'hero_reflection'},'hero-help':{category:'hero_rescue'},
@@ -31,7 +31,7 @@ export class ArcadeAudio{
     this.onSubtitle=options.onSubtitle||null;
     this.now=options.now||(()=>performance.now()/1000);
     this.random=options.random||Math.random;
-    this.audioFactory=options.audioFactory||(url=>new Audio(url));
+    this.buffers=new Map();this.lastError=null;this.lastFailedLine=null;this.onPlaybackError=options.onPlaybackError||null;this.voiceGain=null;this.audioFactory=options.audioFactory||(url=>this.createBufferedVoice(url));
     this.cooldowns={global:options.globalCooldown??.7,line:options.lineCooldown??35,category:options.categoryCooldown??3,speaker:options.speakerCooldown??4};
     this.nextSpeechAt=-Infinity;this.lineHistory=new Map();this.categoryHistory=new Map();this.speakerHistory=new Map();this.lastByPool=new Map();this.playCounts=new Map();this.token=0;
     const source=options.manifest?Promise.resolve(options.manifest):(options.fetcher||fetch)(options.manifestUrl||'./audio/dialogue-manifest.json').then(r=>{if(!r.ok)throw new Error('Dialogue unavailable');return r.json();});
@@ -45,8 +45,14 @@ export class ArcadeAudio{
     }).catch(error=>{console.warn(error.message);return 0;});
   }
   get playing(){return this.speaking&&!this.paused;}
-  unlock(){if(!this.context){const Context=window.AudioContext||window.webkitAudioContext;if(!Context)return;this.context=new Context();this.master=this.context.createGain();this.master.gain.value=.35;this.master.connect(this.context.destination);}this.context.resume().catch(()=>{});}
+  unlock(){if(!this.context){const Context=window.AudioContext||window.webkitAudioContext;if(!Context)return;this.context=new Context();this.master=this.context.createGain();this.master.gain.value=.35;this.master.connect(this.context.destination);this.voiceGain=this.context.createGain();this.voiceGain.gain.value=1;this.voiceGain.connect(this.context.destination);}this.context.resume().catch(()=>{});}
   toggle(){this.enabled=!this.enabled;if(this.master)this.master.gain.setTargetAtTime(this.enabled?.35:0,this.context.currentTime,.05);if(this.voice)this.voice.muted=!this.enabled;return this.enabled;}
+  createBufferedVoice(url){
+    if(!this.context)throw new Error('Tap SOUND to enable voices.');
+    const context=this.context;
+    const load=()=>{if(!this.buffers.has(url)){const pending=fetch(url).then(r=>{if(!r.ok)throw new Error('Voice download failed: '+r.status);return r.arrayBuffer();}).then(bytes=>context.decodeAudioData(bytes));this.buffers.set(url,pending);pending.catch(()=>this.buffers.delete(url));}return this.buffers.get(url);};
+    return new BufferedVoice(context,this.voiceGain,load);
+  }
   _speakerKey(line,options){return options.speakerId?String(options.speakerId):`${line.role}:${line.gender||'any'}:${line.persona}`;}
   _eligible(line,options,now){
     if(line.id==='citizen-v3-return-donkey'&&now-(this.completedLines.get('citizen-v3-donkey')??-Infinity)>60)return false;
@@ -105,7 +111,7 @@ export class ArcadeAudio{
       await voice.play();
       if(token!==this.token||this.voice!==voice)return false;
       if(this.paused)voice.pause();
-      const now=this.now();
+      this.lastError=null;this.lastFailedLine=null;const now=this.now();
       this.lineHistory.set(line.id,now);this.categoryHistory.set(line.category,now);
       this.speakerHistory.set(this._speakerKey(line,options),now);
       this.playCounts.set(line.id,(this.playCounts.get(line.id)||0)+1);
@@ -114,11 +120,11 @@ export class ArcadeAudio{
         id:line.id,category:line.category,gender:line.gender,persona:line.persona,speakerId:options.speakerId||null};
       try{(options.onSubtitle||this.onSubtitle)?.(subtitle);}catch(error){console.warn('Subtitle callback failed:',error.message);}
       return true;
-    }catch{if(voice&&token===this.token)voice.pause();finish(false);return false;}
+    }catch(error){if(voice&&token===this.token){voice.pause();voice.dispose?.();}if(token===this.token){this.lastError=String(error?.message||error);this.lastFailedLine=line.id;this.onPlaybackError?.(this.lastError);}finish(false);return false;}
   }
   stopSpeech({resetCooldowns=false}={}){
     this.token++;
-    if(this.voice){this.voice.onended=null;this.voice.onerror=null;this.voice.pause();this.voice.currentTime=0;}
+    if(this.voice){this.voice.onended=null;this.voice.onerror=null;this.voice.pause();this.voice.currentTime=0;this.voice.dispose?.();}
     this.voice=null;this.speaking=false;this.paused=false;this.nextSpeechAt=this.now();
     if(resetCooldowns){this.completedLines.clear();this.lineHistory.clear();this.categoryHistory.clear();this.speakerHistory.clear();this.lastByPool.clear();this.playCounts.clear();}
   }
@@ -155,4 +161,18 @@ export class BossConversation {
       else{this.retryTime+=.25;this.delay=.25;if(this.retryTime>=5){this.index++;this.retryTime=0;}}
     }).catch(()=>{if(token===this.token){this.pending=false;this.index++;}});
   }
+}
+
+// Decoded speech shares the gesture-unlocked AudioContext with game effects.
+// Pause stores its position; stop invalidates pending decode/start operations.
+export class BufferedVoice{
+  constructor(context,destination,load){this.context=context;this.destination=destination;this.load=load;this.offset=0;this.startedAt=0;this.source=null;this.buffer=null;this.gain=context.createGain();this.gain.connect(destination);this.volume=1;this.muted=false;this.generation=0;this.paused=true;}
+  set volume(value){this.level=value;this.syncGain();}get volume(){return this.level;}
+  set muted(value){this.isMuted=value;this.syncGain();}get muted(){return this.isMuted;}
+  syncGain(){if(this.gain)this.gain.gain.value=this.isMuted?0:(this.level??1);}
+  get currentTime(){return this.offset+(this.source?this.context.currentTime-this.startedAt:0);}
+  set currentTime(value){this.offset=Math.max(0,value);}
+  async play(){const generation=++this.generation;await this.context.resume();if(this.context.state!=='running')throw new Error('Browser audio is suspended. Tap SOUND.');this.buffer=await this.load();if(generation!==this.generation)return;const source=this.context.createBufferSource();source.buffer=this.buffer;source.connect(this.gain);this.source=source;this.paused=false;this.startedAt=this.context.currentTime;source.onended=()=>{source.disconnect();if(this.source!==source)return;this.source=null;this.offset=0;this.paused=true;this.gain.disconnect();this.onended?.();};source.start(0,Math.min(this.offset,Math.max(0,this.buffer.duration-.001)));}
+  dispose(){this.pause();this.gain.disconnect();}
+  pause(){this.generation++;if(this.source){const source=this.source;this.offset=this.currentTime;this.source=null;source.onended=null;source.stop();source.disconnect();}this.paused=true;}
 }
