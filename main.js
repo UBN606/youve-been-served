@@ -26,7 +26,7 @@ let contactShadows,renderer,composer,scene,camera,world,teacher,session,citizens
 let cameraMode='chase',cameraYaw=0,cameraPitch=.32,drag=null,lastFrame=performance.now(),quality=true,lastMotion=new THREE.Vector3(0,0,-1),velocity=0;
 const combat=new CounterFlow();let practice=-1,practiceClock=0;
 let fallingStones=[],stoneClock=5;const stoneGeometry=new THREE.IcosahedronGeometry(.85,1),stoneMaterial=new THREE.MeshStandardMaterial({color:'#aa9275',roughness:.92,metalness:0});
-let ripples=[],floaters=[],markers=[],timeSamples=[],fps=60,best=0;
+let ripples=[],floaters=[],markers=[],timeSamples=[],fps=60,best=0,shake=0;
 let navigation,bolts=[],shotCooldown=0,mouseFire=false,voiceClock=0,quipIndex=0,pleaIndex=0,dialogueLife=0,releaseRanks=[];
 const boltGeometry=new THREE.SphereGeometry(.17,12,8),boltMaterial=new THREE.MeshBasicMaterial({color:'#fff5bf'});
 const SHOT_RANGE=12;
@@ -89,8 +89,16 @@ function clearSight(a,b){const distance=Math.hypot(b.x-a.x,b.z-a.z),steps=Math.c
 function rescue(wave=false){
   if(session?.phase!=='playing'||boss.active&&conversation.active)return;
   if(wave){
-    if(practice>=0||!boss.active){if(combat.defend()){if(practice>=0){combat.guard=2;combat.cooldown=1.4;}pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:2,wave:true,hits:0});actionText('GRAY ROCK',teacher.group.position);}return;}
-    if(boss.active){if(boss.grayRock()){pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:8.2,wave:true,hits:0});say('hero-grayrock');}return;}
+    if(practice>=0||!boss.active){
+      if(combat.defend()){if(practice>=0){combat.guard=2;combat.cooldown=1.4;}pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:2,wave:true,hits:0});actionText('GRAY ROCK',teacher.group.position);}
+      else actionText('RECHARGING',teacher.group.position);
+      return;
+    }
+    if(boss.active){
+      if(boss.grayRock()){pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:8.2,wave:true,hits:0});say('hero-grayrock');}
+      else actionText('RECHARGING',teacher.group.position);
+      return;
+    }
     const charged=session.grace>=100;session.rescue(teacher.group.position.x,teacher.group.position.z,true);if(charged)sayCategory('hero_rescue');return;
   }
   if(shotCooldown>0)return;shotCooldown=.34;savePose=.32;
@@ -105,7 +113,7 @@ function rescue(wave=false){
 function dash(){if(session?.dash())audio.dash();}
 function noContact(){if(session?.phase!=='playing'||!boss.noContact())return;conversation.reset();audio.stopSpeech({resetCooldowns:true});say('hero-nocontact');showToast('YOU ARE IN QUARANTINE.');pulse({x:teacher.group.position.x,z:teacher.group.position.z,radius:32,wave:true,hits:1});bossWinDelay=2.4;session.timeLeft=Math.max(5,session.timeLeft);session.score+=1500;}
 function showToast(message){$('toast').textContent=message;$('toast').classList.add('show');toastLife=1.35;}
-function start(skipPractice=false){practice=skipPractice===true?-1:0;practiceClock=0;combat.reset();for(const stone of fallingStones){scene.remove(stone.mesh,stone.ring);stone.ring.geometry.dispose();stone.ring.material.dispose();}fallingStones=[];stoneClock=5;audio.unlock();audio.stopSpeech({resetCooldowns:true});conversation.reset();session.reset();boss.reset();bossView.clear();bossWinDelay=0;contactCooldown=0;$('boss-hud').classList.add('hidden');$('chapter').innerHTML='<span>01 / LOVE BOMB</span><small>Read the spread. Dash through the gap.</small>';controller.reset();keys.clear();touch={x:0,y:0};mouseFire=false;shotCooldown=0;voiceClock=0;quipIndex=0;pleaIndex=0;dialogueLife=0;$('dialogue').classList.remove('show');for(const b of bolts){scene.remove(b.mesh);b.mesh.children[0].material.dispose();}bolts=[];teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;cameraYaw=0;lastMotion.set(0,0,-1);velocity=0;savePose=0;toastLife=0;
+function start(skipPractice=false){practice=skipPractice===true?-1:0;practiceClock=0;combat.reset();for(const stone of fallingStones){scene.remove(stone.mesh,stone.ring);stone.ring.geometry.dispose();stone.ring.material.dispose();}fallingStones=[];stoneClock=5;audio.unlock();audio.stopSpeech({resetCooldowns:true});conversation.reset();session.reset();boss.reset();bossView.clear();bossWinDelay=0;contactCooldown=0;$('boss-hud').classList.add('hidden');$('chapter').innerHTML='<span>01 / LOVE BOMB</span><small>Read the spread. Dash through the gap.</small>';controller.reset();keys.clear();touch={x:0,y:0};mouseFire=false;shotCooldown=0;voiceClock=0;quipIndex=0;pleaIndex=0;dialogueLife=0;$('dialogue').classList.remove('show');for(const b of bolts){scene.remove(b.mesh);b.mesh.children[0].material.dispose();}bolts=[];teacher.group.position.set(world.spawn.x,0,world.spawn.z);teacher.group.rotation.y=Math.PI;cameraYaw=0;lastMotion.set(0,0,-1);velocity=0;savePose=0;toastLife=0;shake=0;
   for(const b of foeShots)scene.remove(b.mesh);foeShots=[];for(const c of citizens)c.setSaved?.(false);for(const [i,m] of markers.entries()){m.savedAt=-100;m.sprite.material.map=hostileId(i)?hostileTexture:pendingTexture;m.sprite.material.opacity=1;m.ring.visible=true;}
   for(const r of ripples){scene.remove(r.mesh);r.mesh.geometry.dispose();r.mesh.material.dispose();}ripples=[];
   for(const f of floaters)f.el.remove();floaters=[];for(const p of particleData)p.life=0;
@@ -125,7 +133,7 @@ function handleEvents(){for(const e of session.consumeEvents()){
       if(session.saved%RULES.waveSize===0)conversation.start({id:['LoveBomb','Mirror','SmearCampaign'][wave]});
       $('chapter').innerHTML=['<span>01 / LOVE BOMB</span><small>Read the spread. Dash through the gap.</small>','<span>02 / MIRROR</span><small>It aims where you were. Change direction.</small>','<span>03 / SMEAR CAMPAIGN</span><small>A wide barrage. Keep your distance.</small>'][wave];
     }citizens[e.id].setSaved?.(true);markers[e.id].savedAt=worldTime;markers[e.id].sprite.material.map=savedTexture;markers[e.id].ring.visible=false;emit(e.x,1.5,e.z,35,colors.gold,1.5);audio.save(e.combo);showToast(e.combo>=3?`${e.combo} SERVED IN A ROW!`:'YOU\'VE BEEN SERVED!');if(!audio.speaking){if(++quipIndex%4===0)sayCategory('hero_rescue',{context:citizenVoice(e.id).persona==='self-reflecting'?'obstruction':'general'});else reaction(e.id);}const el=document.createElement('div');el.className='floating';el.textContent=`SERVED! +${e.points}`;$('floaters').appendChild(el);floaters.push({el,x:e.x,z:e.z,y:2.8,life:1.5});}
-  if(e.type==='hurt'){actionText('−30 PATIENCE',teacher.group.position);showToast('COMPOSURE HIT · '+e.composure+'/6 · DASH TO EVADE');$('app').animate([{filter:'brightness(1.5) saturate(.4)'},{filter:'none'}],{duration:220});}
+  if(e.type==='hurt'){actionText('−30 PATIENCE',teacher.group.position);showToast('COMPOSURE HIT · '+e.composure+'/6 · DASH TO EVADE');shake=Math.max(shake,.55);$('app').animate([{filter:'brightness(1.5) saturate(.4)'},{filter:'none'}],{duration:220});}
   if(e.type==='finish')finish(e);
   if(e.type==='boss-start'){
     boss.start();teacher.group.position.set(0,0,12);teacher.group.rotation.y=Math.PI;cameraYaw=0;session.timeLeft=Math.max(70,session.timeLeft);
@@ -188,7 +196,7 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
     bossView.update(conversation.active?0:dt,worldTime,boss,teacher.group.position,(blocked,pos)=>{emit(pos.x,pos.y,pos.z,14,blocked?colors.mint:new THREE.Color('#bd86ca'),1);if(!blocked&&contactCooldown===0){session.takeHit();contactCooldown=.6;}else if(blocked){combat.blocks++;actionText('BLOCKED',pos);if(boss.counter()){combat.counters++;session.composure=Math.min(6,session.composure+1);session.score+=300;actionText('3× COUNTER +300',bossView.group.position);}}});
     if(bossWinDelay>0){bossWinDelay-=dt;if(bossWinDelay<=0){session.finish(true);handleEvents();}}
   }else velocity=0;
-  savePose=Math.max(0,savePose-dt);teacher.update(dt,{time:worldTime,speed:velocity,rescuing:savePose>0,saved:false});
+  savePose=Math.max(0,savePose-dt);teacher.update(dt,{time:worldTime,speed:velocity,rescuing:savePose>0,saved:false,dashing:session.dashLeft>0});
   for(let i=0;i<citizens.length;i++){const p=session.people[i],m=markers[i];const available=practice>=0?i===0:session.available(p);citizens[i].group.visible=available&&(!p.saved||worldTime-m.savedAt<8);m.sprite.visible=available;if(!p.saved)m.ring.visible=available;citizens[i].group.position.set(p.x,0,p.z);if(citizens[i].group.visible)citizens[i].update(dt,{time:worldTime,speed:playing?(p.speed||0):0,rescuing:false,saved:p.saved});m.sprite.position.set(p.x,(p.saved?2.9:3.15)+Math.sin(worldTime*2+i)*.10,p.z);m.ring.position.set(p.x,.035,p.z);m.sprite.material.opacity=p.saved?Math.max(.25,1-(worldTime-m.savedAt)*.3):.9;m.sprite.scale.setScalar(p.saved?.49:.64+Math.sin(worldTime*2+i)*.025);m.ring.material.opacity=.4+Math.sin(worldTime*2+i)*.16;}
   world.update?.(dt,worldTime);contactShadows.update();
   for(let i=0;i<particleData.length;i++){const p=particleData[i];if(p.life<=0){particlePositions[i*3+1]=-1000;continue;}p.life-=dt;particlePositions[i*3]+=p.vx*dt;particlePositions[i*3+1]+=p.vy*dt;particlePositions[i*3+2]+=p.vz*dt;p.vy-=dt*1.2;const f=Math.max(0,p.life/p.max);particleColors[i*3]*=1-dt*.55;particleColors[i*3+1]*=1-dt*.55;particleColors[i*3+2]*=1-dt*.55;}
@@ -204,7 +212,10 @@ function frame(now){requestAnimationFrame(frame);const raw=(now-lastFrame)/1000;
     // Keep the chase camera out of opaque building volumes using segment tests.
     if(cameraMode==='chase'){const delta=camDesired.clone().sub(cameraTarget);for(let f=.12;f<=1;f+=.055){const q=cameraTarget.clone().addScaledVector(delta,f);if(world.colliders.some(b=>q.y<(b.height||6.3)&&q.x>b.minX-.15&&q.x<b.maxX+.15&&q.z>b.minZ-.15&&q.z<b.maxZ+.15)){camDesired.copy(cameraTarget).addScaledVector(delta,Math.max(.22,f-.08));break;}}}
     camera.position.lerp(camDesired,1-Math.exp(-dt*8));camera.lookAt(cameraTarget);
+    // Impact shake: brief, small, decays fast. Applied after lookAt so the aim stays honest.
+    if(shake>.002){camera.position.x+=(Math.random()-.5)*shake*.22;camera.position.y+=(Math.random()-.5)*shake*.15;camera.position.z+=(Math.random()-.5)*shake*.22;}
   }
+  shake=Math.max(0,shake-dt*2.8);
   for(let i=floaters.length-1;i>=0;i--){const f=floaters[i];f.life-=dt;f.y+=dt*.7;tmp.set(f.x,f.y,f.z).project(camera);f.el.style.left=(tmp.x*.5+.5)*innerWidth+'px';f.el.style.top=(-tmp.y*.5+.5)*innerHeight+'px';f.el.style.opacity=Math.max(0,Math.min(1,f.life));if(f.life<=0){f.el.remove();floaters.splice(i,1);}}
   if(toastLife>0){toastLife-=dt;if(toastLife<=0)$('toast').classList.remove('show');}
   uiTick+=dt;mapTick+=dt;if(uiTick>.07&&session.phase!=='ready'){updateHUD();uiTick=0;}if(mapTick>.1){drawMap();mapTick=0;}
@@ -262,6 +273,6 @@ function updateStones(dt){
     const ring=new THREE.Mesh(new THREE.RingGeometry(1.45,1.65,48),new THREE.MeshBasicMaterial({color:'#ffb65c',side:THREE.DoubleSide,transparent:true,opacity:.8,depthWrite:false}));ring.rotation.x=-Math.PI/2;ring.position.set(hero.x,.055,hero.z);scene.add(ring);fallingStones.push({mesh,ring,age:0,owner:owner.id});actionText('LOOK OUT · STONEFALL',hero);
   }}
   for(let i=fallingStones.length-1;i>=0;i--){const stone=fallingStones[i];stone.age+=dt;stone.ring.material.opacity=.5+.4*Math.sin(stone.age*16);const fall=Math.max(0,(stone.age-1.8)/.55);stone.mesh.position.y=Math.max(.5,10-9.5*fall*fall);stone.mesh.rotation.x+=dt*.8;stone.mesh.rotation.z+=dt*.4;
-    if(stone.age>=2.35){const pos=stone.mesh.position;emit(pos.x,.3,pos.z,45,colors.sand,1.6);pulse({x:pos.x,z:pos.z,radius:1.65,wave:false,hits:0});if(Math.hypot(pos.x-teacher.group.position.x,pos.z-teacher.group.position.z)<1.65){if(combat.block(stone.owner)){actionText('BLOCKED · COUNTER THE SENDER',pos);}else if(session.takeHit())actionText('STONEFALL',pos);}scene.remove(stone.mesh,stone.ring);stone.ring.geometry.dispose();stone.ring.material.dispose();fallingStones.splice(i,1);}
+    if(stone.age>=2.35){const pos=stone.mesh.position;emit(pos.x,.3,pos.z,45,colors.sand,1.6);pulse({x:pos.x,z:pos.z,radius:1.65,wave:false,hits:0});const heroDist=Math.hypot(pos.x-teacher.group.position.x,pos.z-teacher.group.position.z);if(heroDist<3.5)shake=Math.max(shake,.3);if(heroDist<1.65){if(combat.block(stone.owner)){actionText('BLOCKED · COUNTER THE SENDER',pos);}else if(session.takeHit())actionText('STONEFALL',pos);}scene.remove(stone.mesh,stone.ring);stone.ring.geometry.dispose();stone.ring.material.dispose();fallingStones.splice(i,1);}
   }
 }

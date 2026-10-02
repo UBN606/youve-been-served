@@ -7,6 +7,9 @@ const scarfColors = ['#b2a184','#9c896b','#c1b193','#7f8076','#a8977c'];
 const CROWD_ASSET_DIRECTORY='./assets/crowd/rigged-v3';
 let templatesPromise;
 
+// Deterministic per-actor jitter so the crowd looks the same every run.
+const hash01 = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
 function actorFromTemplate(template, index) {
   const group = new THREE.Group();
   group.name = `Anatomical citizen ${index + 1}`;
@@ -19,11 +22,22 @@ function actorFromTemplate(template, index) {
     object.castShadow = true;
     object.receiveShadow = true;
     const recolor = material => {
-      const kind = material.name.match(/^Crowd (robe|trim|scarf)(?:\.\d+)?$/)?.[1];
+      const kind = material.name.match(/^Crowd (robe|trim|scarf|male skin|female skin)(?:\.\d+)?$/)?.[1];
       if (!kind) return material;
       if (materials.has(material)) return materials.get(material);
       const variant = material.clone();
-      variant.color.set(kind === 'robe' ? robeColors[index % robeColors.length] : kind === 'scarf' ? scarfColors[index % scarfColors.length] : '#66513a');
+      if (kind === 'robe') {
+        variant.color.set(robeColors[index % robeColors.length]);
+        variant.color.offsetHSL((hash01(index + 7) - .5) * .02, (hash01(index + 13) - .5) * .07, (hash01(index + 29) - .5) * .06);
+      } else if (kind === 'scarf') {
+        variant.color.set(scarfColors[index % scarfColors.length]);
+        variant.color.offsetHSL((hash01(index + 41) - .5) * .02, 0, (hash01(index + 43) - .5) * .05);
+      } else if (kind === 'male skin' || kind === 'female skin') {
+        // Keep the authored base tone; jitter it so neighbors are not clones.
+        variant.color.offsetHSL((hash01(index + 53) - .5) * .025, (hash01(index + 59) - .5) * .09, (hash01(index + 61) - .5) * .10);
+      } else {
+        variant.color.set('#66513a');
+      }
       materials.set(material, variant);
       return variant;
     };
@@ -48,9 +62,11 @@ function actorFromTemplate(template, index) {
   model.traverse(object => { if (object.isSkinnedMesh) object.skeleton.update(); });
   const bounds = new THREE.Box3().setFromObject(model, true);
   if (!Number.isFinite(bounds.max.y - bounds.min.y) || bounds.max.y <= bounds.min.y) throw new Error('Crowd GLB has invalid standing bounds.');
-  const height = (index % 2 ? 1.69 : 1.78) + (index % 4) * .022;
+  const height = (index % 2 ? 1.69 : 1.78) + (index % 4) * .022 + hash01(index + 71) * .03;
   const scale = height / (bounds.max.y - bounds.min.y);
-  model.scale.setScalar(scale);
+  // Subtle build variation: broader or slimmer shoulders, same height.
+  const build = 1 + (hash01(index * 3 + 5) - .5) * .08;
+  model.scale.set(scale * build, scale, scale * (2 - build));
   model.position.y = -bounds.min.y * scale;
   const floor = model.position.y;
   model.updateMatrixWorld(true);
@@ -81,9 +97,14 @@ function actorFromTemplate(template, index) {
   group.userData.asset = { source: `citizen-${index % 2 ? 'female' : 'male'}.glb`, bones: bones.size, anatomical: true };
   const authoredClips=template.animations||[];
   const mixer=authoredClips.length?new THREE.AnimationMixer(model):null;
-  const runAction=mixer?.clipAction(authoredClips.find(c=>c.name==='Run')).play();
-  const idleAction=mixer?.clipAction(authoredClips.find(c=>c.name==='Idle')).play();
-  let locomotionWeight=0;
+  const findClip=name=>authoredClips.find(c=>c.name===name);
+  const runAction=findClip('Run')&&mixer?mixer.clipAction(findClip('Run')).play():null;
+  const walkAction=findClip('Walk')&&mixer?mixer.clipAction(findClip('Walk')).play():null;
+  const idleAction=findClip('Idle')&&mixer?mixer.clipAction(findClip('Idle')).play():null;
+  // Every neighbor dances to their own clock: without this the whole crowd
+  // marches in perfect lockstep because all mixers start on the same frame.
+  if(mixer)mixer.setTime(index*0.617+(index%2)*1.31);
+  let locomotionWeight=0,runMix=0;
   group.userData.asset.clips=authoredClips.map(c=>c.name);
   const actor = {
     group,
@@ -94,8 +115,13 @@ function actorFromTemplate(template, index) {
       const safeSpeed = Number.isFinite(speed) ? Math.max(0, speed) : 0;
       if(mixer){
         locomotionWeight=THREE.MathUtils.damp(locomotionWeight,!savedState&&safeSpeed>.1?1:0,12,safeDt);
-        runAction.setEffectiveWeight(locomotionWeight);runAction.setEffectiveTimeScale(THREE.MathUtils.clamp(safeSpeed/1.37,.1,3.5));
-        idleAction.setEffectiveWeight(1-locomotionWeight);mixer.update(safeDt);return;
+        // Citizens stroll toward the hero; save the run for real speed.
+        runMix=THREE.MathUtils.damp(runMix,THREE.MathUtils.clamp((safeSpeed-2)/.6,0,1),8,safeDt);
+        const idleW=1-locomotionWeight;
+        if(idleAction)idleAction.setEffectiveWeight(idleW);
+        if(walkAction){walkAction.setEffectiveWeight(locomotionWeight*(1-runMix));walkAction.setEffectiveTimeScale(THREE.MathUtils.clamp(safeSpeed/1.25,.5,2));}
+        if(runAction){runAction.setEffectiveWeight(locomotionWeight*(walkAction?runMix:1));runAction.setEffectiveTimeScale(THREE.MathUtils.clamp(safeSpeed/1.37,.1,3.5));}
+        mixer.update(safeDt);return;
       }
       relief = THREE.MathUtils.damp(relief, savedState ? 1 : 0, 5, safeDt);
       pace = THREE.MathUtils.damp(pace, savedState ? 0 : THREE.MathUtils.clamp(safeSpeed / 2.5, 0, 1.25), 11, safeDt);

@@ -214,7 +214,7 @@ export function createLocalGeneratedRig(source, { height = 1.85, forwardYaw = 0,
     ],
   };
   group.userData.asset = { source: sourceUrl, candidate: true, localGeneratedRig: true, rigProfile,forwardYaw,bones: rig.bones.length, animationMode: diagnostics.animationMode };
-  let phase = 0, elapsed = 0, pace = 0, rescue = 0, groundingOffset = 0, disposed = false;
+  let phase = 0, elapsed = 0, pace = 0, rescue = 0, dashAmt = 0, groundingOffset = 0, disposed = false;
   const pose = (name, x = 0, y = 0, z = 0) => rig.named.get(name).rotation.set(x, y, z, 'XYZ');
   const rest = new Map(rig.bones.map(bone => [bone, bone.position.clone()]));
   function resetBindPose() {
@@ -242,35 +242,41 @@ export function createLocalGeneratedRig(source, { height = 1.85, forwardYaw = 0,
     skeleton,
     skinnedMeshes: meshes,
     diagnostics,
-    getDiagnostics() { return { ...diagnostics, pace, rescue, phase, elapsed, groundingOffset, disposed }; },
+    getDiagnostics() { return { ...diagnostics, pace, rescue, dashAmt, phase, elapsed, groundingOffset, disposed }; },
     resetBindPose,
-    update(dt, { time, speed = 0, rescuing = false } = {}) {
+    update(dt, { time, speed = 0, rescuing = false, dashing = false } = {}) {
       if (disposed) return;
       const safeDt = Number.isFinite(dt) ? THREE.MathUtils.clamp(dt, 0, .1) : 0;
       const metresPerSecond = Number.isFinite(speed) ? Math.abs(speed) : 0;
       elapsed = Number.isFinite(time) ? time : elapsed + safeDt;
       pace = THREE.MathUtils.damp(pace, THREE.MathUtils.clamp(metresPerSecond / 4.2, 0, 1.15), 10, safeDt);
       rescue = THREE.MathUtils.damp(rescue, rescuing ? 1 : 0, rescuing ? 15 : 7, safeDt);
+      dashAmt = THREE.MathUtils.damp(dashAmt, dashing ? 1 : 0, 9, safeDt);
       phase += safeDt * Math.min(6,metresPerSecond) * Math.PI * 2 / 1.65;
       const wave = Math.sin(phase), breath = Math.sin(elapsed * 2.1);
-      pose('pelvis', -.015 * pace, wave * pace * .025);
-      pose('spine', -.025 * pace, -wave * pace * .025);
-      pose('chest', breath * .005, -wave * pace * .02);
+      // A dash reads as a committed lunge: longer stride, torso pitched
+      // forward, arms swept back. Amplitudes stay inside the restricted
+      // arms-down motion range the robe topology tolerates.
+      const stride = Math.min(1.25, pace + dashAmt * .3);
+      const lean = dashAmt;
+      pose('pelvis', -.015 * pace - .06 * lean, wave * pace * .025);
+      pose('spine', -.025 * pace - .14 * lean, -wave * pace * .025);
+      pose('chest', breath * .005 - .08 * lean, -wave * pace * .02);
       pose('neck', 0, 0, 0);
-      pose('head', .012 * pace, breath * .008);
+      pose('head', .012 * pace + .06 * lean, breath * .008);
       for (const [side, sign] of [['L', 1], ['R', -1]]) {
         const step = wave * sign;
-        const thigh = -step * pace * (profile.armsDown?.24:.49);
-        const knee = ((profile.armsDown?.015:.10) + Math.max(0, -step) * (profile.armsDown?.26:.77)) * pace;
+        const thigh = -step * stride * (profile.armsDown?.24:.49);
+        const knee = ((profile.armsDown?.015:.10) + Math.max(0, -step) * (profile.armsDown?.26:.77)) * stride;
         const offer = rescue * (side === 'R' ? 1 : .65);
         pose(`thigh_${side}`, thigh);
         pose(`calf_${side}`, knee);
-        pose(`foot_${side}`, -thigh - knee + Math.max(0, -step) * pace * .14);
+        pose(`foot_${side}`, -thigh - knee + Math.max(0, -step) * stride * .14);
         pose(`clavicle_${side}`, 0, 0, 0);
-        pose(`upperarm_${side}`, step * pace * (profile.armsDown?.16:.60) - offer * (profile.armsDown?.08:1.02), 0, -sign * (profile.armsDown?0:.30) * (1 - offer * .8));
-        pose(`forearm_${side}`, -(profile.armsDown?0:.12) - pace * (profile.armsDown?.025:.48) - offer * (profile.armsDown?.025:.22));
+        pose(`upperarm_${side}`, step * pace * (profile.armsDown?.16:.60) * (1 - lean * .5) - offer * (profile.armsDown?.08:1.02) + lean * .5, 0, -sign * (profile.armsDown?0:.30) * (1 - offer * .8));
+        pose(`forearm_${side}`, -(profile.armsDown?0:.12) - pace * (profile.armsDown?.025:.48) - offer * (profile.armsDown?.025:.22) - lean * .35);
         pose(`hand_${side}`, (profile.armsDown?.01:.04) * offer, -sign * (profile.armsDown?0:.18) * (1 - offer), sign * (profile.armsDown?.012:.05) * pace);
-        pose(`cloth_${side}`, thigh * (profile.armsDown?.60:.28), 0, -sign * .012 * pace + wave * pace * .008);
+        pose(`cloth_${side}`, thigh * (profile.armsDown?.60:.28), 0, -sign * .012 * stride + wave * stride * .008);
       }
       groundFeet();
     },
